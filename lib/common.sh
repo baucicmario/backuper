@@ -132,3 +132,13 @@ run_docker_compose() {
     $SUDO docker compose "$@"
   fi
 }
+
+# ── Sanitize a string for use as a directory name ──
+# Replaces / with _ first (common in Docker service names), then strips any
+# remaining characters that are unsafe in filesystem paths.
+# Keeps: alphanumerics, hyphens, dots, underscores.
+# Usage: sanitize_dirname <string>
+sanitize_dirname() {
+  local raw="$1"
+  printf '%s' "$raw" | tr -s '/' '_' | sed 's/[^A-Za-z0-9._-]/_/g'
+}
