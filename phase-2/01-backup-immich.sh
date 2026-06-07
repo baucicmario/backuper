@@ -1,231 +1,164 @@
 #!/usr/bin/env bash
-# phase-2/01-backup-immich.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 
-# ── Detect docker command (sudo if needed) ────────────────────────────────────
-if docker info >/dev/null 2>&1; then
-  DOCKER="docker"
-else
-  DOCKER="sudo docker"
-fi
+require_sudo
 
-# ── Args / state ──────────────────────────
-STATE_FILE="${1:-/tmp/immich_detected.env}"
-[ -f "$STATE_FILE" ] || die "State file not found: $STATE_FILE  (run 00-detect-immich.sh first)"
+STATE_FILE="${STATE_FILE:-/tmp/immich_detected.env}"
+[ -f "$STATE_FILE" ] || die "Detection state not found: $STATE_FILE"
+
 # shellcheck source=/dev/null
 source "$STATE_FILE"
 
-: "${ORIGINAL_COMPOSE:?State file missing ORIGINAL_COMPOSE}"
-: "${IMMICH_SERVICE:?State file missing IMMICH_SERVICE}"
-: "${POSTGRES_SERVICE:?State file missing POSTGRES_SERVICE}"
-POSTGRES_COMPOSE="${POSTGRES_COMPOSE:-$ORIGINAL_COMPOSE}"
+: "${IMMICH_COMPOSE_FILE:?Missing IMMICH_COMPOSE_FILE in $STATE_FILE}"
+: "${IMMICH_ENV_FILE:?Missing IMMICH_ENV_FILE in $STATE_FILE}"
+: "${IMMICH_SERVICE:?Missing IMMICH_SERVICE in $STATE_FILE}"
+: "${POSTGRES_SERVICE:?Missing POSTGRES_SERVICE in $STATE_FILE}"
 
-# ── Config ────────────────────────────────
-# AFTER — $BACKUP_ROOT set by phase2.sh takes priority; CENTRAL_BACKUP_DIR is second; local path is last resort
-BACKUP_ROOT="${BACKUP_ROOT:-${CENTRAL_BACKUP_DIR:+$CENTRAL_BACKUP_DIR/immich_backups}}"
-BACKUP_ROOT="${BACKUP_ROOT:-$SCRIPT_DIR/immich_backups}"
-PGUSER="${PGUSER:-postgres}"
-PGDATABASE="${PGDATABASE:-immich}"
-TIMESTAMP="$(date -u +"%Y%m%dT%H%M%SZ")"
-BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
+BACKUP_ROOT="${BACKUP_ROOT:-$CENTRAL_BACKUP_DIR/immich_backups}"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+BACKUP_DIR="$BACKUP_ROOT/$RUN_ID"
 
-# ── Pre-flight ────────────────────────────
-require_cmd yq
-require_cmd docker
+mkdir -p "$BACKUP_DIR"
+load_env "$IMMICH_ENV_FILE"
 
-[ -f "$ORIGINAL_COMPOSE" ] || die "Immich compose file not found: $ORIGINAL_COMPOSE"
-[ -f "$POSTGRES_COMPOSE" ] || die "Postgres compose file not found: $POSTGRES_COMPOSE"
+docker_ok() {
+  docker info >/dev/null 2>&1
+}
 
-# ── Helper: get container id for a service ────────────────────────────────────
-container_id_for_service() {
-  local compose_file="$1"
-  local svc="$2"
-  local cid=""
+docker_run() {
+  if docker_ok; then
+    docker "$@"
+  elif command -v sg >/dev/null 2>&1 && sg docker -c "docker info" >/dev/null 2>&1; then
+    sg docker -c "docker $*"
+  else
+    $SUDO docker "$@"
+  fi
+}
 
-  # Try 1: project name from compose file
-  local project
-  project="$(yq -r '.name // ""' "$compose_file" 2>/dev/null || true)"
-  if [ -n "$project" ]; then
-    cid="$($DOCKER compose -f "$compose_file" -p "$project" ps -q "$svc" 2>/dev/null | head -n1 || true)"
+compose_run() {
+  if docker_ok; then
+    docker compose "$@"
+  elif command -v sg >/dev/null 2>&1 && sg docker -c "docker info" >/dev/null 2>&1; then
+    sg docker -c "docker compose $*"
+  else
+    $SUDO docker compose "$@"
+  fi
+}
+
+smart_copy() {
+  local src="$1"
+  local dst="$2"
+  local stderr_file
+  stderr_file="$(mktemp)"
+
+  mkdir -p "$dst"
+
+  if rsync -rltD \
+      --no-perms --no-owner --no-group \
+      --omit-dir-times \
+      "$src"/ "$dst"/ 2>"$stderr_file"; then
+    rm -f "$stderr_file"
+    return 0
   fi
 
-  # Try 2: infer project from directory name
-  if [ -z "$cid" ]; then
-    cid="$($DOCKER compose -f "$compose_file" ps -q "$svc" 2>/dev/null | head -n1 || true)"
-  fi
-
-  # Try 3: match by compose service label (works across project name mismatches)
-  if [ -z "$cid" ]; then
-    cid="$($DOCKER ps -q --filter "label=com.docker.compose.service=$svc" 2>/dev/null | head -n1 || true)"
-  fi
-
-  # Try 4: match by container_name field in compose file
-  if [ -z "$cid" ]; then
-    local container_name
-    container_name="$(yq -r ".services.\"${svc}\".container_name // \"\"" "$compose_file" 2>/dev/null || true)"
-    if [ -n "$container_name" ]; then
-      cid="$($DOCKER ps -q --filter "name=^${container_name}$" 2>/dev/null | head -n1 || true)"
+  if grep -qE 'failed to set times|Operation not permitted|some files/attrs were not transferred' "$stderr_file"; then
+    info "  (metadata not supported by destination filesystem — retrying without preserve)"
+    rm -rf "$dst"
+    mkdir -p "$dst"
+    if cp -r "$src"/. "$dst" 2>"$stderr_file"; then
+      ok "Copied to $dst (data only — metadata skipped)"
+      rm -f "$stderr_file"
+      return 0
     fi
   fi
 
-  echo "$cid"
+  cat "$stderr_file" >&2
+  rm -f "$stderr_file"
+  return 1
 }
 
-bold "${GREEN}📦 Immich Backup${RESET}"
+bold "📦 Immich Backup"
 line
-info "  Immich compose  : $ORIGINAL_COMPOSE"
+info "  Immich compose  : $IMMICH_COMPOSE_FILE"
 info "  Immich service  : $IMMICH_SERVICE"
-info "  Postgres compose: $POSTGRES_COMPOSE"
+info "  Postgres compose: $IMMICH_COMPOSE_FILE"
 info "  Postgres service: $POSTGRES_SERVICE"
 info "  Backup target   : $BACKUP_DIR"
 line
 
-# ── Locate the upload/library volume mount ────────────────────────────────────
-load_env "$(dirname "$ORIGINAL_COMPOSE")/.env"
-
-UPLOAD_HOST_PATH=""
-
-# Stage 1: bind-mount whose container path contains "upload"
-while IFS= read -r vol_entry; do
-  [ -z "$vol_entry" ] && continue
-  host_part="$(echo "$vol_entry" | cut -d: -f1)"
-  container_part="$(echo "$vol_entry" | cut -d: -f2)"
-  if echo "$container_part" | grep -q "upload"; then
-    expanded="$(eval echo "$host_part" 2>/dev/null || echo "$host_part")"
-    if [[ "$expanded" == /* ]] || [[ "$expanded" == ./* ]] || [[ "$expanded" == ~* ]]; then
-      UPLOAD_HOST_PATH="$(eval echo "$expanded")"
-      info "Found upload bind-mount in compose: $UPLOAD_HOST_PATH"
-      break
-    fi
-  fi
-done < <(yq -r ".services.\"${IMMICH_SERVICE}\".volumes[]" "$ORIGINAL_COMPOSE" 2>/dev/null || true)
-
-# Stage 2: named volume — inspect running container
-if [ -z "$UPLOAD_HOST_PATH" ]; then
-  info "Bind-mount not found — checking running container for named volume mount..."
-  IMMICH_CID="$(container_id_for_service "$ORIGINAL_COMPOSE" "$IMMICH_SERVICE")"
-  if [ -n "$IMMICH_CID" ]; then
-    UPLOAD_HOST_PATH="$(
-      $DOCKER inspect "$IMMICH_CID" \
-        --format '{{range .Mounts}}{{if contains .Destination "upload"}}{{.Source}}{{end}}{{end}}' \
-        2>/dev/null | head -n1 || true
-    )"
-    [ -n "$UPLOAD_HOST_PATH" ] && info "Resolved via docker inspect: $UPLOAD_HOST_PATH"
-  else
-    warn "Immich container not running — cannot resolve named volume via container inspect."
-  fi
-fi
-
-# Stage 3: named volume — docker volume inspect (works even if container stopped)
-if [ -z "$UPLOAD_HOST_PATH" ]; then
-  info "Trying docker volume inspect..."
-  while IFS= read -r vol_entry; do
-    [ -z "$vol_entry" ] && continue
-    vol_name="$(echo "$vol_entry" | cut -d: -f1)"
-    container_part="$(echo "$vol_entry" | cut -d: -f2)"
-    if echo "$container_part" | grep -q "upload"; then
-      project="$(yq -r '.name // ""' "$ORIGINAL_COMPOSE" 2>/dev/null || true)"
-      for candidate in "${project:+${project}_${vol_name}}" "$vol_name"; do
-        [ -z "$candidate" ] && continue
-        resolved="$($DOCKER volume inspect "$candidate" --format '{{.Mountpoint}}' 2>/dev/null || true)"
-        if [ -n "$resolved" ] && [ -d "$resolved" ]; then
-          UPLOAD_HOST_PATH="$resolved"
-          info "Resolved named volume '$candidate' → $UPLOAD_HOST_PATH"
-          break 2
-        fi
-      done
-    fi
-  done < <(yq -r ".services.\"${IMMICH_SERVICE}\".volumes[]" "$ORIGINAL_COMPOSE" 2>/dev/null || true)
-fi
-
-if [ -z "$UPLOAD_HOST_PATH" ]; then
-  warn "Could not automatically locate the Immich upload volume."
-  warn "Set UPLOAD_HOST_PATH manually and re-run, or check the volumes in your compose file."
-else
-  info "Upload library host path: $UPLOAD_HOST_PATH"
-fi
-
-# ── Create backup directory ───────────────
 info "Creating backup directory: $BACKUP_DIR"
 mkdir -p "$BACKUP_DIR"
 
-# ── Step 1: Postgres dump ─────────────────
-line
-bold "Step 1 — Postgres database dump"
+info "Step 1 — Postgres database dump"
+db_dump="$BACKUP_DIR/immich_db.sql.gz"
+db_log="$BACKUP_DIR/pg_dump.stderr.log"
 
-POSTGRES_CID="$(container_id_for_service "$POSTGRES_COMPOSE" "$POSTGRES_SERVICE")"
-[ -n "$POSTGRES_CID" ] \
-  || die "Postgres container ($POSTGRES_SERVICE) is not running. Start the stack first."
+container_id="$(compose_run -f "$IMMICH_COMPOSE_FILE" ps -q "$POSTGRES_SERVICE")"
+[ -n "$container_id" ] || die "Could not resolve Postgres container id for service '$POSTGRES_SERVICE'"
 
-DB_DUMP="$BACKUP_DIR/immich_db.sql.gz"
-info "Dumping from container $POSTGRES_CID (user: $PGUSER)..."
+info "Dumping from container $container_id (user: postgres)..."
 
-$DOCKER exec "$POSTGRES_CID" pg_dumpall -U "$PGUSER" | gzip > "$DB_DUMP"
+DB_CANDIDATES=()
+[ -n "${DB_DATABASE_NAME:-}" ] && DB_CANDIDATES+=("$DB_DATABASE_NAME")
+[ -n "${POSTGRES_DB:-}" ] && DB_CANDIDATES+=("$POSTGRES_DB")
+DB_CANDIDATES+=("immich" "postgres")
 
-ok "Database dump saved: $DB_DUMP  ($(du -sh "$DB_DUMP" | cut -f1))"
+dump_ok=false
+used_db=""
 
-# ── Step 2: Copy upload library ───────────
-line
-bold "Step 2 — Copy upload library"
+for db_name in "${DB_CANDIDATES[@]}"; do
+  [ -n "$db_name" ] || continue
+  : > "$db_log"
 
-if [ -n "$UPLOAD_HOST_PATH" ] && [ -d "$UPLOAD_HOST_PATH" ]; then
-  LIBRARY_DEST="$BACKUP_DIR/library"
-  info "Copying: $UPLOAD_HOST_PATH → $LIBRARY_DEST"
-  mkdir -p "$LIBRARY_DEST"
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --info=progress2 "$UPLOAD_HOST_PATH/" "$LIBRARY_DEST/"
-  else
-    cp -a "$UPLOAD_HOST_PATH/." "$LIBRARY_DEST/"
+  if docker_run exec "$container_id" sh -lc \
+    "PGPASSWORD=\"\$POSTGRES_PASSWORD\" pg_dump -U postgres --clean --if-exists --no-owner --no-privileges \"$db_name\"" \
+    2>"$db_log" | gzip > "$db_dump"; then
+    dump_ok=true
+    used_db="$db_name"
+    break
   fi
-  ok "Library copied: $LIBRARY_DEST  ($(du -sh "$LIBRARY_DEST" | cut -f1))"
-else
-  warn "Skipping library copy — upload host path not found or not a directory."
-  warn "Manually copy your Immich upload volume to: $BACKUP_DIR/library"
-fi
 
-# ── Step 3: Copy compose configs ──────────
-line
-bold "Step 3 — Copy compose configuration"
-
-cp "$ORIGINAL_COMPOSE" "$BACKUP_DIR/docker-compose.yml"
-ok "Copied Immich compose → docker-compose.yml"
-
-if [ "$POSTGRES_COMPOSE" != "$ORIGINAL_COMPOSE" ]; then
-  cp "$POSTGRES_COMPOSE" "$BACKUP_DIR/docker-compose.database.yml"
-  ok "Copied Postgres compose → docker-compose.database.yml"
-fi
-
-ENV_SRC="$(dirname "$ORIGINAL_COMPOSE")/.env"
-if [ -f "$ENV_SRC" ]; then
-  cp "$ENV_SRC" "$BACKUP_DIR/.env"
-  ok "Copied .env"
-else
-  warn "No .env found alongside the Immich compose file — skipping."
-fi
-
-for meta_src in \
-    "$(dirname "$ORIGINAL_COMPOSE")/.stack-meta" \
-    "$(dirname "$POSTGRES_COMPOSE")/.stack-meta"; do
-  [ -f "$meta_src" ] || continue
-  dest_name=".stack-meta"
-  [ "$meta_src" = "$(dirname "$POSTGRES_COMPOSE")/.stack-meta" ] \
-    && [ "$POSTGRES_COMPOSE" != "$ORIGINAL_COMPOSE" ] \
-    && dest_name=".stack-meta.database"
-  cp "$meta_src" "$BACKUP_DIR/$dest_name"
-  ok "Copied $(basename "$meta_src") → $dest_name"
+  rm -f "$db_dump"
 done
 
-# ── Summary ───────────────────────────────
-echo
-line
-bold "${GREEN}🎉 Immich Backup Complete${RESET}"
-info "  Location : $BACKUP_DIR"
-info "  DB dump  : $DB_DUMP"
-[ -d "${BACKUP_DIR}/library" ] \
-  && info "  Library  : $BACKUP_DIR/library  ($(du -sh "$BACKUP_DIR/library" | cut -f1))" \
-  || warn "  Library  : NOT backed up (upload path not resolved)"
-line
-ok "Done. Total backup size: $(du -sh "$BACKUP_DIR" | cut -f1)"
+if [ "$dump_ok" != true ]; then
+  error "Database dump failed. See: $db_log"
+  [ -s "$db_log" ] && sed 's/^/  /' "$db_log" >&2
+  exit 1
+fi
+
+ok "Database dump saved: $db_dump  ($(du -h "$db_dump" | awk '{print $1}'))"
+info "Database used: $used_db"
+
+info "Step 2 — Copy upload library"
+
+upload_src="${UPLOAD_LOCATION:-}"
+if [ -z "$upload_src" ]; then
+  upload_src="$(yq -r '.services["'"$IMMICH_SERVICE"'"].volumes[]? | select(type == "!!str")' "$IMMICH_COMPOSE_FILE" \
+    | awk -F: '$1 ~ /^\// {print $1; exit}')"
+fi
+
+[ -n "$upload_src" ] || die "Could not determine upload source path."
+[ -d "$upload_src" ] || die "Upload source path is not a directory: $upload_src"
+
+upload_dst="$BACKUP_DIR/library"
+info "Copying: $upload_src → $upload_dst"
+smart_copy "$upload_src" "$upload_dst" || die "Failed to copy upload library"
+
+info "Step 3 — Write manifest"
+cat > "$BACKUP_DIR/manifest.env" <<EOF
+RUN_ID=$RUN_ID
+IMMICH_COMPOSE_FILE=$IMMICH_COMPOSE_FILE
+IMMICH_ENV_FILE=$IMMICH_ENV_FILE
+IMMICH_SERVICE=$IMMICH_SERVICE
+POSTGRES_SERVICE=$POSTGRES_SERVICE
+UPLOAD_SOURCE=$upload_src
+BACKUP_DIR=$BACKUP_DIR
+DATABASE_USED=$used_db
+EOF
+
+ok "Manifest saved: $BACKUP_DIR/manifest.env"
+ok "Backup complete."

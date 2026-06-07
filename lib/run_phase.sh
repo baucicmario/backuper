@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# lib/run_phase.sh — generic phase runner
-# Usage: source or call directly
-# run_phase <PHASE_DIR> <PHASE_LABEL> [--exclude <glob>] [--no-skip-disabled] [--dry-run] [-- <forward args>]
 set -euo pipefail
 
 SCRIPT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_LIB/common.sh"
 
 run_phase() {
-  local PHASE_DIR="$1"; local PHASE_LABEL="$2"; shift 2
+  local PHASE_DIR="$1"
+  local PHASE_LABEL="$2"
+  shift 2
 
   [ -d "$PHASE_DIR" ] || { echo "Error: directory not found: $PHASE_DIR" >&2; exit 1; }
 
@@ -16,13 +15,14 @@ run_phase() {
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --exclude)        shift; EXCLUDES+=("$1") ;;
+      --exclude) shift; EXCLUDES+=("$1") ;;
       --no-skip-disabled) SKIP_DISABLED=false ;;
-      --dry-run)        DRY_RUN=true ;;
+      --dry-run) DRY_RUN=true ;;
       --) shift; FORWARD_ARGS+=("$@"); break ;;
       --help|-h)
         echo "Usage: $PHASE_LABEL [--exclude <glob>] [--no-skip-disabled] [--dry-run] [-- <args>]"
-        exit 0 ;;
+        exit 0
+        ;;
       *) echo "Unknown argument: $1" >&2; exit 2 ;;
     esac
     shift
@@ -67,12 +67,11 @@ run_phase() {
     if bash "$script" "${FORWARD_ARGS[@]}"; then
       ok "Completed: $name"
     else
-      error "Failed: $name"; exit 1
+      error "Failed: $name"
+      exit 1
     fi
   done
 
   echo
-  [ "$DRY_RUN" = true ] \
-    && ok "Dry run complete — no scripts were executed." \
-    || ok "🎉 All $PHASE_LABEL scripts executed successfully."
+  [ "$DRY_RUN" = true ] && ok "Dry run complete — no scripts were executed." || ok "🎉 All $PHASE_LABEL scripts executed successfully."
 }
