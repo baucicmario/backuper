@@ -1,66 +1,53 @@
-#!/bin/bash
-# =============================================================
-# 🐳 Dockge Installer & Setup
-# =============================================================
-set -e
+#!/usr/bin/env bash
+# phase-0/05-install-dockge.sh
+# Installs Dockge (Docker Compose stack manager UI).
+# Prerequisite: Docker + Compose plugin must already be installed (run 04 first).
+set -euo pipefail
 
-# --- Colors ---
-RED="\e[31m"
-GREEN="\e[32m"
-YELLOW="\e[33m"
-BLUE="\e[36m"
-BOLD="\e[1m"
-RESET="\e[0m"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 
-line() { echo -e "${BLUE}------------------------------------------------------------${RESET}"; }
-
-echo -e "${BOLD}${GREEN}🐳 Dockge Installer & Setup${RESET}"
-line
-
-# --- Ensure Docker is installed ---
-if ! command -v docker >/dev/null 2>&1; then
-    echo -e "${YELLOW}⚙️ Docker not found. Installing...${RESET}"
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    rm -f get-docker.sh
-else
-    echo -e "${GREEN}✅ Docker is already installed.${RESET}"
-fi
-line
-
-# --- Ensure Docker Compose plugin is available ---
-if ! docker compose version >/dev/null 2>&1; then
-    echo -e "${YELLOW}⚙️ Docker Compose plugin not found. Installing...${RESET}"
-    sudo apt update && sudo apt install -y docker-compose-plugin
-else
-    echo -e "${GREEN}✅ Docker Compose plugin is available.${RESET}"
-fi
-line
-
-# --- Create Dockge directory ---
 DOCKGE_DIR="/opt/dockge"
-sudo mkdir -p "$DOCKGE_DIR"
-sudo chown "$USER":"$USER" "$DOCKGE_DIR"
-cd "$DOCKGE_DIR"
+DOCKGE_PORT=5001
+COMPOSE_URL="https://raw.githubusercontent.com/louislam/dockge/master/compose.yaml"
 
-# --- Download compose.yaml ---
-echo -e "${BLUE}⬇️  Downloading Dockge compose.yaml...${RESET}"
-curl -fsSL https://raw.githubusercontent.com/louislam/dockge/master/compose.yaml -o compose.yaml
+bold "${GREEN}🐳 Dockge Installer${RESET}"
 line
 
-# --- Start Dockge ---
-echo -e "${BLUE}⚙️ Starting Dockge using Docker Compose...${RESET}"
+require_sudo
+
+# ── Pre-flight checks ─────────────────────
+command -v docker >/dev/null 2>&1 \
+  || die "Docker not found. Run phase-0/04-install-docker.sh first."
+ok "Docker found."
+
+docker compose version >/dev/null 2>&1 \
+  || die "Docker Compose plugin not found. Run phase-0/04-install-docker.sh first."
+ok "Docker Compose plugin available."
+line
+
+# ── Create Dockge directory ───────────────
+info "Setting up $DOCKGE_DIR..."
+$SUDO mkdir -p "$DOCKGE_DIR"
+$SUDO chown "${USER}:${USER}" "$DOCKGE_DIR"
+
+# ── Download compose file ─────────────────
+info "Downloading Dockge compose.yaml..."
+curl -fsSL "$COMPOSE_URL" -o "$DOCKGE_DIR/compose.yaml"
+line
+
+# ── Start Dockge ──────────────────────────
+info "Starting Dockge..."
 if command -v sg >/dev/null 2>&1; then
-    sg docker -c "docker compose up -d"
+  sg docker -c "docker compose -f '$DOCKGE_DIR/compose.yaml' up -d"
 else
-    sudo docker compose up -d
+  $SUDO docker compose -f "$DOCKGE_DIR/compose.yaml" up -d
 fi
 line
 
-# --- Detect IP and print access link ---
-IP_ADDR=$(hostname -I | awk '{print $1}')
-DOCKGE_PORT=5001  # default Dockge port
-echo -e "${GREEN}${BOLD}✅ Dockge installed and running successfully!${RESET}"
-echo -e "${BOLD}💡 You can access Dockge at:${RESET} ${YELLOW}http://${IP_ADDR}:${DOCKGE_PORT}${RESET}"
-echo -e "${BOLD}💡 You can manage Dockge with 'docker compose' commands in ${DOCKGE_DIR}${RESET}"
+# ── Done ──────────────────────────────────
+IP="$(hostname -I | awk '{print $1}')"
+ok "Dockge installed and running!"
+echo -e "💡 Access at: ${YELLOW}http://${IP}:${DOCKGE_PORT}${RESET}"
+echo -e "💡 Manage:    ${YELLOW}docker compose -f $DOCKGE_DIR/compose.yaml${RESET}"
 line
