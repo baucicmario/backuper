@@ -113,8 +113,12 @@ for pkg in "${SELECTED[@]}"; do
     warn "${pkg} not in apt — trying fallback..."
     case "$pkg" in
       cockpit-navigator)
-        install_45drives_deb "cockpit-navigator" "(_all|_amd64)\.deb$" "Cockpit Navigator"
-        ;;
+          echo -e "${BLUE}⬇️ Installing Cockpit Navigator (direct download)...${RESET}"
+          NAV_URL="https://github.com/45Drives/cockpit-navigator/releases/download/v0.5.10/cockpit-navigator_0.5.10-1focal_all.deb"
+          curl -L -o "${TMP_DIR}/cockpit-navigator.deb" "$NAV_URL"
+          sudo apt install -y "${TMP_DIR}/cockpit-navigator.deb" || sudo apt install -yf
+          echo -e "${GREEN}✅ Cockpit Navigator installed.${RESET}"
+          ;;
       cockpit-file-sharing)
         install_45drives_deb "cockpit-file-sharing" "(_all|_amd64)\.deb$" "File Sharing"
         ;;

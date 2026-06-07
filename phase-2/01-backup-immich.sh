@@ -218,68 +218,6 @@ for meta_src in \
   ok "Copied $(basename "$meta_src") → $dest_name"
 done
 
-# ── Step 4: Write restore manifest ────────
-line
-bold "Step 4 — Write restore manifest"
-
-MANIFEST="$BACKUP_DIR/RESTORE.md"
-IMMICH_IMAGE="$(yq -r ".services.\"${IMMICH_SERVICE}\".image // \"ghcr.io/immich-app/immich-server:release\"" "$ORIGINAL_COMPOSE")"
-POSTGRES_IMAGE="$(yq -r ".services.\"${POSTGRES_SERVICE}\".image // \"tensorchord/pgvecto-rs:pg14-v0.2.0\"" "$POSTGRES_COMPOSE")"
-
-cat > "$MANIFEST" << 'RESTORE_EOF'
-# Immich Restore Guide
-RESTORE_EOF
-
-cat >> "$MANIFEST" << RESTORE
-Generated: $(date -u)
-Backup dir: $BACKUP_DIR
-
-## Contents
-| File | Description |
-|---|---|
-| \`docker-compose.yml\` | Immich service compose file |
-| \`docker-compose.database.yml\` | Postgres compose file (only if split from Immich) |
-| \`.env\` | Environment variables (if present) |
-| \`.stack-meta\` | Phase-1 provenance metadata (if present) |
-| \`immich_db.sql.gz\` | Full Postgres dump (pg_dumpall) |
-| \`library/\` | Immich upload library (photos/videos) |
-
-## Images at backup time
-- Immich server : \`$IMMICH_IMAGE\`
-- Postgres       : \`$POSTGRES_IMAGE\`
-
-## Restore steps
-
-### 1. Prepare the destination
-Copy \`docker-compose.yml\` (and \`docker-compose.database.yml\` if present)
-plus \`.env\` into your target stack directory, e.g. \`/opt/stacks/immich/\`.
-
-### 2. Restore the upload library
-\`\`\`bash
-rsync -a "$BACKUP_DIR/library/" "/your/new/upload/path/"
-\`\`\`
-
-### 3. Start Postgres only
-\`\`\`bash
-docker compose up -d $POSTGRES_SERVICE
-sleep 10
-\`\`\`
-
-### 4. Restore the database
-\`\`\`bash
-docker compose exec $POSTGRES_SERVICE psql -U $PGUSER -c "DROP DATABASE IF EXISTS $PGDATABASE;"
-docker compose exec $POSTGRES_SERVICE psql -U $PGUSER -c "CREATE DATABASE $PGDATABASE;"
-zcat "$BACKUP_DIR/immich_db.sql.gz" | docker compose exec -T $POSTGRES_SERVICE psql -U $PGUSER
-\`\`\`
-
-### 5. Start all services
-\`\`\`bash
-docker compose up -d
-\`\`\`
-RESTORE
-
-ok "Restore manifest written: $MANIFEST"
-
 # ── Summary ───────────────────────────────
 echo
 line
@@ -289,6 +227,5 @@ info "  DB dump  : $DB_DUMP"
 [ -d "${BACKUP_DIR}/library" ] \
   && info "  Library  : $BACKUP_DIR/library  ($(du -sh "$BACKUP_DIR/library" | cut -f1))" \
   || warn "  Library  : NOT backed up (upload path not resolved)"
-info "  Manifest : $MANIFEST"
 line
 ok "Done. Total backup size: $(du -sh "$BACKUP_DIR" | cut -f1)"
