@@ -1,36 +1,20 @@
 #!/usr/bin/env bash
 # phase-2/01-backup-immich.sh
-# Backs up Immich data using the state written by 00-detect-immich.sh.
-#
-# What it does:
-#   1. Loads the state file (ORIGINAL_COMPOSE, IMMICH_SERVICE,
-#      POSTGRES_SERVICE, POSTGRES_COMPOSE)
-#   2. Finds the upload/library volume path from the Immich compose file
-#   3. Dumps the Postgres database with pg_dumpall
-#   4. Copies the upload library from the host mount
-#   5. Copies compose files + .env + .stack-meta
-#   6. Writes a restore manifest
-#
-# Usage:
-#   bash 01-backup-immich.sh [STATE_FILE]
-#   STATE_FILE defaults to /tmp/immich_detected.env
-#
-# Env overrides (optional):
-#   BACKUP_ROOT   — where to create the timestamped backup dir
-#                   (default: <script-dir>/immich_backups)
-#   PGUSER        — Postgres super-user inside the container (default: postgres)
-#   PGDATABASE    — Postgres database to dump               (default: immich)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 
+# ── Detect docker command (sudo if needed) ────────────────────────────────────
+if docker info >/dev/null 2>&1; then
+  DOCKER="docker"
+else
+  DOCKER="sudo docker"
+fi
+
 # ── Args / state ──────────────────────────
 STATE_FILE="${1:-/tmp/immich_detected.env}"
-
-[ -f "$STATE_FILE" ] \
-  || die "State file not found: $STATE_FILE  (run 00-detect-immich.sh first)"
-
+[ -f "$STATE_FILE" ] || die "State file not found: $STATE_FILE  (run 00-detect-immich.sh first)"
 # shellcheck source=/dev/null
 source "$STATE_FILE"
 
@@ -40,8 +24,8 @@ source "$STATE_FILE"
 POSTGRES_COMPOSE="${POSTGRES_COMPOSE:-$ORIGINAL_COMPOSE}"
 
 # ── Config ────────────────────────────────
-# Place the backup folder next to this script (phase-2/immich_backups/)
-# so it is always on the same filesystem as the project.
+# AFTER — $BACKUP_ROOT set by phase2.sh takes priority; CENTRAL_BACKUP_DIR is second; local path is last resort
+BACKUP_ROOT="${BACKUP_ROOT:-${CENTRAL_BACKUP_DIR:+$CENTRAL_BACKUP_DIR/immich_backups}}"
 BACKUP_ROOT="${BACKUP_ROOT:-$SCRIPT_DIR/immich_backups}"
 PGUSER="${PGUSER:-postgres}"
 PGDATABASE="${PGDATABASE:-immich}"
@@ -52,25 +36,41 @@ BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
 require_cmd yq
 require_cmd docker
 
-[ -f "$ORIGINAL_COMPOSE" ] \
-  || die "Immich compose file not found: $ORIGINAL_COMPOSE"
-
-[ -f "$POSTGRES_COMPOSE" ] \
-  || die "Postgres compose file not found: $POSTGRES_COMPOSE"
+[ -f "$ORIGINAL_COMPOSE" ] || die "Immich compose file not found: $ORIGINAL_COMPOSE"
+[ -f "$POSTGRES_COMPOSE" ] || die "Postgres compose file not found: $POSTGRES_COMPOSE"
 
 # ── Helper: get container id for a service ────────────────────────────────────
 container_id_for_service() {
   local compose_file="$1"
   local svc="$2"
+  local cid=""
+
+  # Try 1: project name from compose file
   local project
   project="$(yq -r '.name // ""' "$compose_file" 2>/dev/null || true)"
-
-  local cid
   if [ -n "$project" ]; then
-    cid="$(docker compose -f "$compose_file" -p "$project" ps -q "$svc" 2>/dev/null | head -n1 || true)"
-  else
-    cid="$(docker compose -f "$compose_file" ps -q "$svc" 2>/dev/null | head -n1 || true)"
+    cid="$($DOCKER compose -f "$compose_file" -p "$project" ps -q "$svc" 2>/dev/null | head -n1 || true)"
   fi
+
+  # Try 2: infer project from directory name
+  if [ -z "$cid" ]; then
+    cid="$($DOCKER compose -f "$compose_file" ps -q "$svc" 2>/dev/null | head -n1 || true)"
+  fi
+
+  # Try 3: match by compose service label (works across project name mismatches)
+  if [ -z "$cid" ]; then
+    cid="$($DOCKER ps -q --filter "label=com.docker.compose.service=$svc" 2>/dev/null | head -n1 || true)"
+  fi
+
+  # Try 4: match by container_name field in compose file
+  if [ -z "$cid" ]; then
+    local container_name
+    container_name="$(yq -r ".services.\"${svc}\".container_name // \"\"" "$compose_file" 2>/dev/null || true)"
+    if [ -n "$container_name" ]; then
+      cid="$($DOCKER ps -q --filter "name=^${container_name}$" 2>/dev/null | head -n1 || true)"
+    fi
+  fi
+
   echo "$cid"
 }
 
@@ -88,25 +88,57 @@ load_env "$(dirname "$ORIGINAL_COMPOSE")/.env"
 
 UPLOAD_HOST_PATH=""
 
+# Stage 1: bind-mount whose container path contains "upload"
 while IFS= read -r vol_entry; do
   [ -z "$vol_entry" ] && continue
   host_part="$(echo "$vol_entry" | cut -d: -f1)"
   container_part="$(echo "$vol_entry" | cut -d: -f2)"
   if echo "$container_part" | grep -q "upload"; then
-    UPLOAD_HOST_PATH="$(eval echo "$host_part")"
-    break
+    expanded="$(eval echo "$host_part" 2>/dev/null || echo "$host_part")"
+    if [[ "$expanded" == /* ]] || [[ "$expanded" == ./* ]] || [[ "$expanded" == ~* ]]; then
+      UPLOAD_HOST_PATH="$(eval echo "$expanded")"
+      info "Found upload bind-mount in compose: $UPLOAD_HOST_PATH"
+      break
+    fi
   fi
 done < <(yq -r ".services.\"${IMMICH_SERVICE}\".volumes[]" "$ORIGINAL_COMPOSE" 2>/dev/null || true)
 
+# Stage 2: named volume — inspect running container
 if [ -z "$UPLOAD_HOST_PATH" ]; then
+  info "Bind-mount not found — checking running container for named volume mount..."
   IMMICH_CID="$(container_id_for_service "$ORIGINAL_COMPOSE" "$IMMICH_SERVICE")"
   if [ -n "$IMMICH_CID" ]; then
     UPLOAD_HOST_PATH="$(
-      docker inspect "$IMMICH_CID" \
+      $DOCKER inspect "$IMMICH_CID" \
         --format '{{range .Mounts}}{{if contains .Destination "upload"}}{{.Source}}{{end}}{{end}}' \
         2>/dev/null | head -n1 || true
     )"
+    [ -n "$UPLOAD_HOST_PATH" ] && info "Resolved via docker inspect: $UPLOAD_HOST_PATH"
+  else
+    warn "Immich container not running — cannot resolve named volume via container inspect."
   fi
+fi
+
+# Stage 3: named volume — docker volume inspect (works even if container stopped)
+if [ -z "$UPLOAD_HOST_PATH" ]; then
+  info "Trying docker volume inspect..."
+  while IFS= read -r vol_entry; do
+    [ -z "$vol_entry" ] && continue
+    vol_name="$(echo "$vol_entry" | cut -d: -f1)"
+    container_part="$(echo "$vol_entry" | cut -d: -f2)"
+    if echo "$container_part" | grep -q "upload"; then
+      project="$(yq -r '.name // ""' "$ORIGINAL_COMPOSE" 2>/dev/null || true)"
+      for candidate in "${project:+${project}_${vol_name}}" "$vol_name"; do
+        [ -z "$candidate" ] && continue
+        resolved="$($DOCKER volume inspect "$candidate" --format '{{.Mountpoint}}' 2>/dev/null || true)"
+        if [ -n "$resolved" ] && [ -d "$resolved" ]; then
+          UPLOAD_HOST_PATH="$resolved"
+          info "Resolved named volume '$candidate' → $UPLOAD_HOST_PATH"
+          break 2
+        fi
+      done
+    fi
+  done < <(yq -r ".services.\"${IMMICH_SERVICE}\".volumes[]" "$ORIGINAL_COMPOSE" 2>/dev/null || true)
 fi
 
 if [ -z "$UPLOAD_HOST_PATH" ]; then
@@ -131,8 +163,7 @@ POSTGRES_CID="$(container_id_for_service "$POSTGRES_COMPOSE" "$POSTGRES_SERVICE"
 DB_DUMP="$BACKUP_DIR/immich_db.sql.gz"
 info "Dumping from container $POSTGRES_CID (user: $PGUSER)..."
 
-docker exec "$POSTGRES_CID" pg_dumpall -U "$PGUSER" \
-  | gzip > "$DB_DUMP"
+$DOCKER exec "$POSTGRES_CID" pg_dumpall -U "$PGUSER" | gzip > "$DB_DUMP"
 
 ok "Database dump saved: $DB_DUMP  ($(du -sh "$DB_DUMP" | cut -f1))"
 
@@ -144,7 +175,6 @@ if [ -n "$UPLOAD_HOST_PATH" ] && [ -d "$UPLOAD_HOST_PATH" ]; then
   LIBRARY_DEST="$BACKUP_DIR/library"
   info "Copying: $UPLOAD_HOST_PATH → $LIBRARY_DEST"
   mkdir -p "$LIBRARY_DEST"
-
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --info=progress2 "$UPLOAD_HOST_PATH/" "$LIBRARY_DEST/"
   else
@@ -196,8 +226,11 @@ MANIFEST="$BACKUP_DIR/RESTORE.md"
 IMMICH_IMAGE="$(yq -r ".services.\"${IMMICH_SERVICE}\".image // \"ghcr.io/immich-app/immich-server:release\"" "$ORIGINAL_COMPOSE")"
 POSTGRES_IMAGE="$(yq -r ".services.\"${POSTGRES_SERVICE}\".image // \"tensorchord/pgvecto-rs:pg14-v0.2.0\"" "$POSTGRES_COMPOSE")"
 
-cat > "$MANIFEST" <<RESTORE
+cat > "$MANIFEST" << 'RESTORE_EOF'
 # Immich Restore Guide
+RESTORE_EOF
+
+cat >> "$MANIFEST" << RESTORE
 Generated: $(date -u)
 Backup dir: $BACKUP_DIR
 
@@ -220,46 +253,29 @@ Backup dir: $BACKUP_DIR
 ### 1. Prepare the destination
 Copy \`docker-compose.yml\` (and \`docker-compose.database.yml\` if present)
 plus \`.env\` into your target stack directory, e.g. \`/opt/stacks/immich/\`.
-Edit \`.env\` if volume paths differ on the new host.
 
 ### 2. Restore the upload library
 \`\`\`bash
-DEST="/your/new/upload/path"   # wherever your compose maps /usr/src/app/upload
-rsync -a "${BACKUP_DIR}/library/" "\$DEST/"
+rsync -a "$BACKUP_DIR/library/" "/your/new/upload/path/"
 \`\`\`
 
 ### 3. Start Postgres only
 \`\`\`bash
-cd /opt/stacks/immich
 docker compose up -d $POSTGRES_SERVICE
 sleep 10
 \`\`\`
 
 ### 4. Restore the database
 \`\`\`bash
-docker compose exec $POSTGRES_SERVICE \
-  psql -U $PGUSER -c "DROP DATABASE IF EXISTS $PGDATABASE;"
-docker compose exec $POSTGRES_SERVICE \
-  psql -U $PGUSER -c "CREATE DATABASE $PGDATABASE;"
-
-zcat "${BACKUP_DIR}/immich_db.sql.gz" | \
-  docker compose exec -T $POSTGRES_SERVICE psql -U $PGUSER
+docker compose exec $POSTGRES_SERVICE psql -U $PGUSER -c "DROP DATABASE IF EXISTS $PGDATABASE;"
+docker compose exec $POSTGRES_SERVICE psql -U $PGUSER -c "CREATE DATABASE $PGDATABASE;"
+zcat "$BACKUP_DIR/immich_db.sql.gz" | docker compose exec -T $POSTGRES_SERVICE psql -U $PGUSER
 \`\`\`
 
 ### 5. Start all services
 \`\`\`bash
 docker compose up -d
 \`\`\`
-
-### 6. Verify
-Open Immich in the browser and confirm your library is visible.
-Run *Administration → Jobs → Regenerate Thumbnails* if previews are missing.
-
-## Notes
-- pg_dumpall dumps ALL databases + roles; the restore above replays everything.
-- Immich versions must match between backup and restore; pin image tags in compose.
-- If the database was split into a separate stack by phase-1, bring up
-  \`docker-compose.database.yml\` first before the main compose.
 RESTORE
 
 ok "Restore manifest written: $MANIFEST"

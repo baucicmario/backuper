@@ -136,7 +136,3 @@ POSTGRES_COMPOSE=$POSTGRES_COMPOSE
 ENVEOF
 
 ok "State saved to $STATE_FILE"
-
-# ── Trigger backup ────────────────────────
-info "Triggering backup..."
-bash "$BACKUP_SCRIPT" "$STATE_FILE"

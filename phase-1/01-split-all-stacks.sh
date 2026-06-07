@@ -13,7 +13,9 @@ require_cmd realpath
 
 # ── Defaults ──────────────────────────────
 DOCKGE_STACKS_DIR="${DOCKGE_STACKS_DIR:-/opt/stacks}"
-OUTPUT_DIR="$SCRIPT_DIR/split_stacks"
+# AFTER — honours CENTRAL_BACKUP_DIR when set, falls back gracefully
+OUTPUT_DIR="${CENTRAL_BACKUP_DIR:+$CENTRAL_BACKUP_DIR/split_stacks}"
+OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/split_stacks}"
 DRY_RUN=false
 FORCE=false
 

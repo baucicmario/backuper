@@ -14,6 +14,13 @@ error() { echo -e "${RED}❌ $*${RESET}" >&2; }
 die()   { error "$*"; exit 1; }
 bold()  { echo -e "${BOLD}$*${RESET}"; }
 
+# ── Centralized backup output directory ───
+# All phases write their output here.
+# Override at runtime:  CENTRAL_BACKUP_DIR=/my/path ./phase1.sh
+# Defaults to a "backups/" folder at the repo root.
+CENTRAL_BACKUP_DIR="${CENTRAL_BACKUP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/backups}"
+export CENTRAL_BACKUP_DIR
+
 # ── Privilege helper ──────────────────────
 # Sets global $SUDO to "" (root) or "sudo", or exits.
 require_sudo() {

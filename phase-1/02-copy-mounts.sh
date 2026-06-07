@@ -8,7 +8,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 
-SPLIT_DIR="${1:-$SCRIPT_DIR/split_stacks}"
+# AFTER
+_default_split_dir="${CENTRAL_BACKUP_DIR:+$CENTRAL_BACKUP_DIR/split_stacks}"
+_default_split_dir="${_default_split_dir:-$SCRIPT_DIR/split_stacks}"
+SPLIT_DIR="${1:-$_default_split_dir}"
 
 require_cmd yq
 
