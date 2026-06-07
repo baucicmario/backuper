@@ -1,0 +1,85 @@
+# Known Docker config/data mount names (container-side path basenames)
+# Matches are always copied without prompting.
+
+# Generic
+config
+configs
+configuration
+data
+appdata
+app-data
+userdata
+db
+database
+storage
+cache
+logs
+log
+backup
+backups
+
+# Reverse proxies
+nginx
+caddy
+traefik
+letsencrypt
+certs
+ssl
+acme
+
+# Databases
+postgres
+postgresql
+mysql
+mariadb
+mongo
+mongodb
+redis
+sqlite
+
+# Media apps
+jellyfin-config
+plex-config
+radarr-config
+sonarr-config
+lidarr-config
+readarr-config
+prowlarr-config
+bazarr-config
+overseerr-config
+tautulli-config
+sabnzbd-config
+nzbget-config
+qbittorrent-config
+transmission-config
+deluge-config
+
+# Home automation
+homeassistant-config
+zigbee2mqtt-data
+zwavejs-data
+mosquitto-config
+mosquitto-data
+nodered-data
+frigate-config
+
+# Monitoring
+prometheus-data
+grafana-data
+loki-data
+influxdb-data
+uptime-kuma
+portainer-data
+dockge-data
+
+# Productivity
+nextcloud-data
+nextcloud-config
+immich-config
+paperless-data
+paperless-media
+gitea-data
+syncthing-config
+vaultwarden-data
+authelia-config
+authentik-data
