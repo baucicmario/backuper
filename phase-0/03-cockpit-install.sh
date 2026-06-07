@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
 # phase-0/03-cockpit-install.sh
-# Installs Cockpit core + selected optional modules.
-# Usage: ./03-cockpit-install.sh [module1 module2 ...]
-# Called automatically by 02-cockpit-select-modules.sh, but can run standalone.
+# Shows a TUI module selector then installs Cockpit core + chosen modules.
+# Can also be called non-interactively: ./03-cockpit-install.sh module1 module2 ...
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 
-[ $# -eq 0 ] && die "No modules specified. Run 02-cockpit-select-modules.sh, or pass module names directly."
-
-SELECTED=("$@")
 TMP_DIR="$(mktemp -d /tmp/cockpit-suite.XXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -27,6 +23,48 @@ CODENAME="${VERSION_CODENAME:-}"
 info "Detected OS: ${YELLOW}${PRETTY_NAME}${RESET}"
 line
 
+# ── Module selection ──────────────────────
+# If modules are passed as arguments, use them directly.
+# Otherwise show the whiptail TUI selector.
+if [ $# -gt 0 ]; then
+  SELECTED=("$@")
+  info "Modules provided via arguments: ${SELECTED[*]}"
+else
+  ensure_cmd whiptail whiptail
+
+  is_installed() { dpkg -l "$1" &>/dev/null && echo "ON" || echo "OFF"; }
+
+  OPTIONS=(
+    "cockpit-networkmanager"  "Network management"                  "$(is_installed cockpit-networkmanager)"
+    "cockpit-packagekit"      "GUI updates"                         "$(is_installed cockpit-packagekit)"
+    "cockpit-storaged"        "Disks & storage"                     "$(is_installed cockpit-storaged)"
+    "cockpit-podman"          "Container management"                "$(is_installed cockpit-podman)"
+    "cockpit-sosreport"       "Diagnostics reports"                 "$(is_installed cockpit-sosreport)"
+    "cockpit-navigator"       "File browser (45Drives)"             "$(is_installed cockpit-navigator)"
+    "cockpit-file-sharing"    "SMB/NFS shares (45Drives)"           "$(is_installed cockpit-file-sharing)"
+    "cockpit-identities"      "User & group management (45Drives)"  "$(is_installed cockpit-identities)"
+  )
+
+  raw_selection=$(whiptail \
+    --title "Cockpit Suite Modules" \
+    --checklist "Select Cockpit components (SPACE = select, ENTER = confirm)" \
+    20 80 10 \
+    "${OPTIONS[@]}" \
+    3>&1 1>&2 2>&3) || { warn "Selection cancelled — nothing will be installed."; exit 0; }
+
+  # whiptail wraps each item in quotes; strip them and split into array
+  IFS=' ' read -r -a SELECTED <<< "$(echo "$raw_selection" | tr -d '"')"
+
+  if [ ${#SELECTED[@]} -eq 0 ]; then
+    warn "No modules selected. Nothing to install."
+    exit 0
+  fi
+
+  info "Selected modules: ${SELECTED[*]}"
+fi
+
+line
+
 # ── Install Cockpit core ──────────────────
 info "Installing Cockpit core + jq..."
 apt_update_once
@@ -39,7 +77,6 @@ ok "Cockpit core installed."
 line
 
 # ── 45Drives GitHub .deb installer ───────
-# Usage: install_45drives_deb <github-repo> <deb-grep-pattern> <friendly-name>
 install_45drives_deb() {
   local repo="$1" pattern="$2" name="$3"
   info "Fetching latest release for ${repo}..."
@@ -49,7 +86,6 @@ install_45drives_deb() {
         | jq -r '.assets[]?.browser_download_url // empty' \
         | grep -E "$pattern" | head -n1)
 
-  # Fall back to first release if latest has no matching asset
   if [ -z "$url" ]; then
     url=$(curl -fsSL "https://api.github.com/repos/45Drives/${repo}/releases" \
           | jq -r '.[0].assets[]?.browser_download_url // empty' \
@@ -77,10 +113,7 @@ for pkg in "${SELECTED[@]}"; do
     warn "${pkg} not in apt — trying fallback..."
     case "$pkg" in
       cockpit-navigator)
-        NAV_URL="https://github.com/45Drives/cockpit-navigator/releases/download/v0.5.10/cockpit-navigator_0.5.10-1focal_all.deb"
-        curl -fsSL -o "${TMP_DIR}/cockpit-navigator.deb" "$NAV_URL"
-        $SUDO apt-get install -y "${TMP_DIR}/cockpit-navigator.deb" || $SUDO apt-get install -yf
-        ok "Cockpit Navigator installed."
+        install_45drives_deb "cockpit-navigator" "(_all|_amd64)\.deb$" "Cockpit Navigator"
         ;;
       cockpit-file-sharing)
         install_45drives_deb "cockpit-file-sharing" "(_all|_amd64)\.deb$" "File Sharing"

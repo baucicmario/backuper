@@ -126,7 +126,9 @@ ensure_docker_compose() {
 # Handles the sg/sudo dance so callers don't have to.
 # Usage: run_docker_compose <compose args...>
 run_docker_compose() {
-  if command -v sg >/dev/null 2>&1; then
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  elif command -v sg >/dev/null 2>&1; then
     sg docker -c "docker compose $*"
   else
     $SUDO docker compose "$@"
