@@ -8,10 +8,28 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 
-# AFTER
+# ── Defaults ──────────────────────────────
 _default_split_dir="${CENTRAL_BACKUP_DIR:+$CENTRAL_BACKUP_DIR/split_stacks}"
 _default_split_dir="${_default_split_dir:-$SCRIPT_DIR/split_stacks}"
-SPLIT_DIR="${1:-$_default_split_dir}"
+SPLIT_DIR="$_default_split_dir"
+
+# ── Argument parsing ──────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output)
+      shift
+      [[ -n "${1:-}" ]] || die "--output requires a path argument"
+      SPLIT_DIR="$1"
+      ;;
+    --help|-h)
+      echo "Usage: $(basename "$0") [--output <split_stacks_dir>]"
+      exit 0
+      ;;
+    -*) die "Unknown flag: $1" ;;
+    *)  SPLIT_DIR="$1" ;;   # positional fallback still works
+  esac
+  shift
+done
 
 require_cmd yq
 
