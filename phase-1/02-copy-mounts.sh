@@ -88,6 +88,7 @@ mapfile -t STACK_DIRS < <(find "$SPLIT_DIR" -mindepth 1 -maxdepth 1 -type d | so
 for stack_dir in "${STACK_DIRS[@]}"; do
   COMPOSE_FILE="$stack_dir/docker-compose.yml"
   ENV_FILE="$stack_dir/.env"
+  META_FILE="$stack_dir/.stack-meta"
 
   if [ ! -f "$COMPOSE_FILE" ]; then
     warn "No docker-compose.yml in $stack_dir — skipping"
@@ -102,10 +103,22 @@ for stack_dir in "${STACK_DIRS[@]}"; do
   COMPOSE_DIR="$(dirname "$(realpath "$COMPOSE_FILE")")"
   info "Target destination folder: $COMPOSE_DIR"
 
+  # ── Resolve the original stack dir for relative paths ──
+  ORIGINAL_STACK_DIR=""
+  if [[ -f "$META_FILE" ]]; then
+    SOURCE_FILE="$(grep '^SOURCE_FILE=' "$META_FILE" | cut -d= -f2-)"
+    [[ -n "$SOURCE_FILE" ]] && ORIGINAL_STACK_DIR="$(dirname "$SOURCE_FILE")"
+  fi
+
+  # Read service name from .stack-meta for collision-safe dest naming
+  SERVICE_NAME=""
+  if [[ -f "$META_FILE" ]]; then
+    SERVICE_NAME="$(grep '^SERVICE_NAME=' "$META_FILE" | cut -d= -f2-)"
+  fi
+
   yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while read -r raw_volume; do
     [ -z "$raw_volume" ] && continue
 
-    # Expand any $VAR references from the loaded .env
     expanded_volume="$(eval echo "$raw_volume")"
     host_path="$(echo "$expanded_volume" | cut -d':' -f1)"
     container_path="$(echo "$expanded_volume" | cut -d':' -f2)"
@@ -116,10 +129,15 @@ for stack_dir in "${STACK_DIRS[@]}"; do
       continue
     fi
 
+    # Resolve relative paths against the ORIGINAL stack dir
+    if [[ "$host_path" =~ ^\. ]] && [[ -n "$ORIGINAL_STACK_DIR" ]]; then
+      host_path="$(realpath -m "$ORIGINAL_STACK_DIR/$host_path")"
+      info "  Resolved relative path → $host_path"
+    fi
+
     # Expand tilde
     eval host_path="$host_path"
 
-    # Skip if source doesn't exist
     if [ ! -d "$host_path" ]; then
       warn "Skipping: source directory '$host_path' does not exist."
       continue
@@ -127,6 +145,15 @@ for stack_dir in "${STACK_DIRS[@]}"; do
 
     dest_folder_name="$(basename "$container_path")"
     destination_path="$COMPOSE_DIR/$dest_folder_name"
+
+    # ── Collision guard: prefix with service name if dest already exists ──
+    if [[ -d "$destination_path" || -e "$destination_path" ]]; then
+      if [[ -n "$SERVICE_NAME" ]]; then
+        dest_folder_name="${SERVICE_NAME}__${dest_folder_name}"
+        destination_path="$COMPOSE_DIR/$dest_folder_name"
+        info "  Name collision — using prefixed destination: $dest_folder_name"
+      fi
+    fi
 
     # Skip self-copy
     if [ "$(realpath "$host_path")" = "$(realpath "$destination_path" 2>/dev/null || echo "")" ]; then
