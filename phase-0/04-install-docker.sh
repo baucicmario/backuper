@@ -47,11 +47,7 @@ info "Verifying Docker..."
 if docker_ver="$(docker --version 2>/dev/null)"; then
   ok "Docker installed: $docker_ver"
   info "Running hello-world test..."
-  if command -v sg >/dev/null 2>&1; then
-    sg docker -c "docker run --rm hello-world" || warn "hello-world test failed — try after re-login."
-  else
-    $SUDO docker run --rm hello-world || warn "hello-world test failed."
-  fi
+  run_docker_compose run --rm hello-world || warn "hello-world test failed — try after re-login."
 else
   die "Docker installation appears to have failed."
 fi

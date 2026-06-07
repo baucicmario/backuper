@@ -8,6 +8,8 @@ PHASE0_DIR="$SCRIPT_DIR/phase-0"
 
 [ -d "$PHASE0_DIR" ] || { echo "Error: phase-0 directory not found: $PHASE0_DIR" >&2; exit 1; }
 
+source "$SCRIPT_DIR/lib/common.sh"
+
 # ── Argument parsing ──────────────────────
 EXCLUDES=()
 SKIP_DISABLED=true
@@ -38,13 +40,13 @@ USAGE
   shift
 done
 
-echo "➡  Running Phase 0 scripts from: $PHASE0_DIR"
-[ "$DRY_RUN" = true ] && echo "   (DRY RUN — no scripts will actually execute)"
+info "➡  Running Phase 0 scripts from: $PHASE0_DIR"
+[ "$DRY_RUN" = true ] && warn "DRY RUN — no scripts will actually execute"
 
 # ── Discover scripts ──────────────────────
 mapfile -t SCRIPTS < <(find "$PHASE0_DIR" -maxdepth 1 -type f -name "*.sh" | sort -V)
 
-[ ${#SCRIPTS[@]} -gt 0 ] || { echo "No .sh scripts found in $PHASE0_DIR"; exit 0; }
+[ ${#SCRIPTS[@]} -gt 0 ] || { warn "No .sh scripts found in $PHASE0_DIR"; exit 0; }
 
 # ── Run each script ───────────────────────
 for script in "${SCRIPTS[@]}"; do
@@ -56,9 +58,9 @@ for script in "${SCRIPTS[@]}"; do
     case "$name" in
       *.disabled.sh|*.sh.disabled|DISABLED_*|*_disabled.sh)
         echo
-        echo "------------------------------------------------------------"
-        echo "Skipping disabled: $script"
-        echo "------------------------------------------------------------"
+        line
+        warn "Skipping disabled: $script"
+        line
         continue ;;
     esac
   fi
@@ -70,31 +72,31 @@ for script in "${SCRIPTS[@]}"; do
   done
   if [ "$skip" = true ]; then
     echo
-    echo "------------------------------------------------------------"
-    echo "Excluded by pattern, skipping: $script"
-    echo "------------------------------------------------------------"
+    line
+    warn "Excluded by pattern, skipping: $script"
+    line
     continue
   fi
 
   echo
-  echo "------------------------------------------------------------"
-  echo "Running: $script"
-  echo "------------------------------------------------------------"
+  line
+  info "Running: $script"
+  line
 
   if [ "$DRY_RUN" = true ]; then
-    echo "(dry-run) Would execute: bash $script"
+    info "(dry-run) Would execute: bash $script"
     continue
   fi
 
   if bash "$script"; then
-    echo "✅ Completed: $name"
+    ok "Completed: $name"
   else
-    echo "❌ Failed: $name" >&2
+    error "Failed: $name"
     exit 1
   fi
 done
 
 echo
 [ "$DRY_RUN" = true ] \
-  && echo "✅ Dry run complete — no scripts were executed." \
-  || echo "🎉 All phase 0 scripts executed successfully."
+  && ok "Dry run complete — no scripts were executed." \
+  || ok "🎉 All phase 0 scripts executed successfully."

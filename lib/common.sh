@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/common.sh — shared helpers sourced by every phase-0 script
+# lib/common.sh — shared helpers sourced by every script in all phases
 # Source with: source "$(dirname "$0")/../lib/common.sh"
 
 # ── Colors ────────────────────────────────
@@ -63,8 +63,8 @@ apt_update_once() {
 }
 
 # ── Ensure a command is present ───────────
+# Tries to install it if missing.
 # Usage: ensure_cmd <cmd> <pkg> [<pkg>...]
-# Installs pkg(s) if cmd is missing.
 ensure_cmd() {
   local cmd="$1"; shift
   if command -v "$cmd" >/dev/null 2>&1; then
@@ -77,6 +77,30 @@ ensure_cmd() {
   command -v "$cmd" >/dev/null 2>&1 \
     && ok "Installed: $cmd" \
     || warn "Could not install $cmd — please install it manually."
+}
+
+# ── Assert a command exists (no install) ──
+# For scripts that depend on phase-0 having run first.
+# Usage: require_cmd <cmd>
+require_cmd() {
+  local cmd="$1"
+  command -v "$cmd" >/dev/null 2>&1 \
+    || die "$cmd not found. Run phase-0 first to install dependencies."
+}
+
+# ── Load a .env file safely ───────────────
+# Usage: load_env [path/to/.env]   (defaults to ./.env)
+load_env() {
+  local env_file="${1:-./.env}"
+  if [ -f "$env_file" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$env_file"
+    set +a
+    info "Loaded env: $env_file"
+  else
+    warn "No .env file found at $env_file — continuing without it."
+  fi
 }
 
 # ── Docker Compose availability check ─────
@@ -96,4 +120,15 @@ ensure_docker_compose() {
       warn "Install the Docker Compose plugin for your distro ($PKG_MANAGER) manually."
       ;;
   esac
+}
+
+# ── Run docker compose respecting group ───
+# Handles the sg/sudo dance so callers don't have to.
+# Usage: run_docker_compose <compose args...>
+run_docker_compose() {
+  if command -v sg >/dev/null 2>&1; then
+    sg docker -c "docker compose $*"
+  else
+    $SUDO docker compose "$@"
+  fi
 }

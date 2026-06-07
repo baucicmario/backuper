@@ -17,13 +17,12 @@ line
 require_sudo
 
 # ── Pre-flight checks ─────────────────────
-command -v docker >/dev/null 2>&1 \
-  || die "Docker not found. Run phase-0/04-install-docker.sh first."
-ok "Docker found."
+require_cmd docker
+require_cmd curl
 
 docker compose version >/dev/null 2>&1 \
   || die "Docker Compose plugin not found. Run phase-0/04-install-docker.sh first."
-ok "Docker Compose plugin available."
+ok "Docker and Compose plugin available."
 line
 
 # ── Create Dockge directory ───────────────
@@ -38,11 +37,7 @@ line
 
 # ── Start Dockge ──────────────────────────
 info "Starting Dockge..."
-if command -v sg >/dev/null 2>&1; then
-  sg docker -c "docker compose -f '$DOCKGE_DIR/compose.yaml' up -d"
-else
-  $SUDO docker compose -f "$DOCKGE_DIR/compose.yaml" up -d
-fi
+run_docker_compose -f "$DOCKGE_DIR/compose.yaml" up -d
 line
 
 # ── Done ──────────────────────────────────
