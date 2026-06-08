@@ -1,0 +1,661 @@
+#!/usr/bin/env python3
+"""
+webui.py — Minimal HTTP server for backuper.
+"""
+import os, subprocess, threading, time, json, stat
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+BACKUP_SH  = os.path.join(SCRIPT_DIR, "..", "..", "backup.sh")
+HOST       = os.environ.get("WEBUI_HOST", "0.0.0.0")
+PORT       = int(os.environ.get("WEBUI_PORT", "8099"))
+SECRET     = os.environ.get("WEBUI_SECRET", "")
+
+_config_lock = threading.Lock()
+_config = {
+    "backup_dir": os.environ.get("CENTRAL_BACKUP_DIR",
+                  os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "backups"))),
+    "stacks_dir": os.environ.get("DOCKGE_STACKS_DIR", "/opt/stacks"),
+}
+
+_lock = threading.Lock()
+_job  = {"running": False, "log": [], "exit_code": None, "started": None}
+
+
+def _run_backup(extra_args):
+    with _config_lock:
+        env_overrides = {
+            "CENTRAL_BACKUP_DIR": _config["backup_dir"],
+            "DOCKGE_STACKS_DIR":  _config["stacks_dir"],
+        }
+    with _lock:
+        _job.update({"running": True, "log": [], "exit_code": None,
+                     "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    cmd = ["bash", BACKUP_SH] + extra_args
+    env = {**os.environ, "TERM": "xterm-256color", **env_overrides}
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1, env=env)
+        for line in proc.stdout:
+            with _lock:
+                _job["log"].append(line.rstrip("\n"))
+        proc.wait()
+        with _lock:
+            _job["exit_code"] = proc.returncode
+    except Exception as e:
+        with _lock:
+            _job["log"].append(f"ERROR: {e}")
+            _job["exit_code"] = 1
+    finally:
+        with _lock:
+            _job["running"] = False
+
+
+def _ls_dir(path):
+    path = os.path.realpath(path)
+    if not os.path.isdir(path):
+        return None, "Not a directory"
+    entries = []
+    try:
+        for name in sorted(os.listdir(path)):
+            full = os.path.join(path, name)
+            try:
+                if stat.S_ISDIR(os.stat(full).st_mode):
+                    entries.append({"name": name, "path": full})
+            except PermissionError:
+                pass
+    except PermissionError:
+        return None, "Permission denied"
+    return {"path": path, "parent": os.path.dirname(path), "entries": entries}, None
+
+
+PAGE = r"""<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backuper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root,[data-theme="light"]{
+  --bg:#f7f6f2;--surface:#f0eeea;--surface-2:#e8e5e0;--surface-3:#dfdcda;
+  --border:rgba(0,0,0,0.10);--text:#1c1a17;--muted:#6b6a67;--faint:#b0afab;
+  --primary:#01696f;--primary-h:#0c4e54;--primary-hi:rgba(1,105,111,0.12);
+  --success:#437a22;--error:#a12c7b;--warn:#fdab43;
+  --radius:.5rem;--shadow:0 4px 16px rgba(0,0,0,.08);
+  --mono:'JetBrains Mono',monospace;--ui:'Inter',system-ui,sans-serif;
+}
+[data-theme="dark"]{
+  --bg:#0f0e0d;--surface:#161513;--surface-2:#1e1c1a;--surface-3:#252320;
+  --border:rgba(255,255,255,.08);--text:#d4d2cf;--muted:#7a7876;--faint:#4a4846;
+  --primary:#4f98a3;--primary-h:#227f8b;--primary-hi:rgba(79,152,163,.12);
+  --success:#6daa45;--error:#d163a7;--warn:#fdab43;
+  --shadow:0 4px 16px rgba(0,0,0,.4);
+}
+html{height:100%;-webkit-font-smoothing:antialiased}
+body{min-height:100dvh;background:var(--bg);color:var(--text);font-family:var(--ui);font-size:1rem;display:flex;flex-direction:column}
+
+/* ── header ─────────────────────────────────────────────────────────── */
+header{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1.5rem;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20;gap:1rem}
+.logo{display:flex;align-items:center;gap:.625rem;text-decoration:none;color:var(--text)}
+.logo svg{color:var(--primary);flex-shrink:0}
+.logo-text{font-weight:600;font-size:1.05rem;letter-spacing:-.01em}
+.logo-sub{font-size:.75rem;color:var(--muted)}
+.header-right{display:flex;align-items:center;gap:.5rem}
+.icon-btn{background:none;border:1px solid var(--border);border-radius:var(--radius);color:var(--muted);padding:.375rem;cursor:pointer;display:flex;align-items:center;transition:color .18s,border-color .18s}
+.icon-btn:hover{color:var(--text);border-color:var(--primary)}
+
+/* ── main ────────────────────────────────────────────────────────────── */
+main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25rem;max-width:960px;width:100%;margin-inline:auto}
+
+/* ── card ────────────────────────────────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem 1.5rem;box-shadow:var(--shadow)}
+.card-title{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:1rem}
+
+/* ── run card layout ─────────────────────────────────────────────────── */
+.run-grid{display:flex;flex-direction:column;gap:1rem}
+.run-top{display:flex;align-items:center;gap:.875rem;flex-wrap:wrap}
+
+/* ── path row (inline, under the button row) ─────────────────────────── */
+.path-row{display:grid;grid-template-columns:1fr 1fr;gap:.625rem}
+@media(max-width:600px){.path-row{grid-template-columns:1fr}}
+
+.path-field{display:flex;flex-direction:column;gap:.25rem}
+.path-label{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
+.path-input-row{display:flex;gap:.25rem}
+.path-input{
+  flex:1;min-width:0;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius);padding:.4rem .625rem;font-size:.78125rem;
+  font-family:var(--mono);color:var(--text);outline:none;
+  transition:border-color .18s;
+}
+.path-input:focus{border-color:var(--primary)}
+.browse-btn{
+  flex-shrink:0;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius);color:var(--muted);padding:.4rem .5rem;
+  cursor:pointer;display:flex;align-items:center;gap:.25rem;
+  font-size:.75rem;transition:border-color .18s,color .18s;white-space:nowrap;
+}
+.browse-btn:hover{border-color:var(--primary);color:var(--primary)}
+
+/* ── save bar (appears after editing) ───────────────────────────────── */
+.save-bar{display:none;align-items:center;gap:.5rem;padding:.375rem .625rem;background:var(--primary-hi);border:1px solid var(--primary);border-radius:var(--radius)}
+.save-bar.show{display:flex}
+.save-bar span{font-size:.78125rem;color:var(--primary);flex:1}
+.save-bar button{font-size:.78125rem;font-weight:600;background:var(--primary);color:#fff;border:none;border-radius:calc(var(--radius) - 2px);padding:.3rem .75rem;cursor:pointer;transition:background .18s}
+.save-bar button:hover{background:var(--primary-h)}
+
+/* ── buttons ────────────────────────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:.4rem;border:none;border-radius:var(--radius);padding:.625rem 1.25rem;font-size:.875rem;font-weight:600;cursor:pointer;transition:background .18s,transform .1s,opacity .18s;white-space:nowrap}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover:not(:disabled){background:var(--primary-h)}
+.btn-ghost{background:var(--surface-3);color:var(--text);border:1px solid var(--border)}
+.btn-ghost:hover{border-color:var(--primary);color:var(--primary)}
+.btn-lg{padding:.75rem 1.75rem;font-size:.9375rem}
+
+/* ── flags ───────────────────────────────────────────────────────────── */
+.flags{display:flex;gap:.35rem;flex-wrap:wrap}
+.flag-toggle{display:inline-flex;align-items:center;gap:.3rem;padding:.3rem .6rem;font-size:.75rem;font-weight:500;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);color:var(--muted);cursor:pointer;transition:border-color .18s,color .18s,background .18s;user-select:none}
+.flag-toggle:hover{border-color:var(--primary);color:var(--text)}
+.flag-toggle.active{border-color:var(--primary);background:var(--primary-hi);color:var(--primary)}
+
+/* ── status badge ────────────────────────────────────────────────────── */
+#status-badge{display:inline-flex;align-items:center;gap:.375rem;padding:.35rem .75rem;border-radius:var(--radius);font-size:.8125rem;font-weight:600;border:1px solid transparent;transition:all .2s}
+#status-badge.idle{background:var(--surface-2);color:var(--muted);border-color:var(--border)}
+#status-badge.running{background:var(--primary-hi);color:var(--primary);border-color:var(--primary)}
+#status-badge.ok{background:rgba(109,170,69,.12);color:var(--success);border-color:var(--success)}
+#status-badge.error{background:rgba(209,99,167,.12);color:var(--error);border-color:var(--error)}
+.dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex-shrink:0}
+.dot.pulse{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── log ─────────────────────────────────────────────────────────────── */
+#log-wrap{display:none;flex-direction:column;gap:.5rem}
+#log-wrap.visible{display:flex}
+.log-header{display:flex;align-items:center;justify-content:space-between}
+.log-meta{font-size:.75rem;color:var(--muted)}
+#btn-clear{font-size:.75rem;color:var(--muted);background:none;border:none;cursor:pointer;padding:.25rem .5rem;border-radius:4px;transition:color .18s}
+#btn-clear:hover{color:var(--text)}
+#log{background:#080807;color:#c9c7c4;font-family:var(--mono);font-size:.8125rem;line-height:1.6;border-radius:var(--radius);padding:1rem;min-height:200px;max-height:55vh;overflow-y:auto;border:1px solid rgba(255,255,255,.05);white-space:pre-wrap;word-break:break-all}
+.ansi-green{color:#6daa45}.ansi-yellow{color:#fdab43}.ansi-red{color:#d163a7}.ansi-blue{color:#4f98a3}.ansi-bold{font-weight:700}
+
+/* ── file browser modal ──────────────────────────────────────────────── */
+.backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:center;justify-content:center;padding:1rem}
+.backdrop.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:calc(var(--radius)*1.5);width:min(540px,100%);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.5);overflow:hidden}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:.875rem 1.25rem;border-bottom:1px solid var(--border);gap:.75rem;flex-shrink:0}
+.modal-head-title{font-weight:600;font-size:.9375rem}
+.modal-close{background:none;border:none;color:var(--muted);cursor:pointer;padding:.25rem;display:flex;border-radius:.375rem;transition:color .18s}
+.modal-close:hover{color:var(--text)}
+
+/* breadcrumb bar */
+.modal-crumb{padding:.5rem 1.25rem;border-bottom:1px solid var(--border);background:var(--surface-2);display:flex;align-items:center;gap:.25rem;flex-wrap:wrap;flex-shrink:0}
+.crumb-seg{font-size:.75rem;font-family:var(--mono);color:var(--muted);cursor:pointer;padding:.125rem .25rem;border-radius:.25rem;transition:color .18s,background .12s}
+.crumb-seg:hover{color:var(--primary);background:var(--primary-hi)}
+.crumb-sep{font-size:.75rem;color:var(--faint)}
+
+/* dir list */
+.modal-body{overflow-y:auto;flex:1}
+.dir-list{list-style:none}
+.dir-item{
+  display:flex;align-items:center;gap:.625rem;padding:.6rem 1.25rem;
+  cursor:pointer;font-size:.875rem;border-bottom:1px solid var(--border);
+  transition:background .1s;
+}
+.dir-item:last-child{border-bottom:none}
+.dir-item:hover{background:var(--surface-2)}
+.dir-item svg{flex-shrink:0}
+.dir-item.is-folder svg{color:var(--warn)}
+.dir-item.is-up svg{color:var(--muted)}
+.dir-item.is-up{color:var(--muted);font-style:italic}
+.dir-empty{padding:2rem;text-align:center;color:var(--faint);font-size:.875rem}
+
+/* footer */
+.modal-foot{padding:.875rem 1.25rem;border-top:1px solid var(--border);background:var(--surface-2);display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-shrink:0}
+.modal-cur{font-family:var(--mono);font-size:.75rem;color:var(--muted);flex:1;word-break:break-all}
+.modal-actions{display:flex;gap:.5rem;flex-shrink:0}
+
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{animation:spin .8s linear infinite;display:inline-block}
+
+@media(max-width:600px){
+  header{padding:.625rem 1rem}
+  main{padding:1.25rem 1rem}
+  .card{padding:1rem 1.25rem}
+  #btn-backup{width:100%;justify-content:center}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="logo" href="/" aria-label="Backuper">
+    <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+      <rect x="3" y="3" width="22" height="22" rx="5" stroke="currentColor" stroke-width="1.8"/>
+      <path d="M9 14.5l3.5 3.5 6-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M14 8v4M14 8l-2 2M14 8l2 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div><div class="logo-text">Backuper</div><div class="logo-sub">Dockge stack backup</div></div>
+  </a>
+  <div class="header-right">
+    <div id="status-badge" class="idle">
+      <span class="dot"></span><span id="status-text">Idle</span>
+    </div>
+    <button class="icon-btn" data-theme-toggle aria-label="Toggle theme">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <div class="card-title">Run Backup</div>
+    <div class="run-grid">
+
+      <!-- top row: big button + flags -->
+      <div class="run-top">
+        <button id="btn-backup" class="btn btn-primary btn-lg" onclick="runBackup()">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          Run Backup Now
+        </button>
+        <div class="flags">
+          <button class="flag-toggle" data-flag="--copy-all"        onclick="toggleFlag(this)" title="Copy all bind mounts without prompting">copy-all</button>
+          <button class="flag-toggle" data-flag="--reject-all"      onclick="toggleFlag(this)" title="Skip all bind mounts (config only)">reject-all</button>
+          <button class="flag-toggle" data-flag="--dry-run"         onclick="toggleFlag(this)" title="Show what would happen, write nothing">dry-run</button>
+          <button class="flag-toggle" data-flag="--force"           onclick="toggleFlag(this)" title="Overwrite existing output folders">force</button>
+          <button class="flag-toggle" data-flag="--archive"         onclick="toggleFlag(this)" title="Pack each service dir into .tar.gz">archive</button>
+          <button class="flag-toggle" data-flag="--archive-replace" onclick="toggleFlag(this)" title="Pack and remove source dirs">archive-replace</button>
+        </div>
+      </div>
+
+      <!-- path row: always visible, right under the button -->
+      <div class="path-row">
+        <div class="path-field">
+          <label class="path-label" for="input-backup-dir">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline;vertical-align:-.1em"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Backup output dir
+          </label>
+          <div class="path-input-row">
+            <input class="path-input" id="input-backup-dir" type="text" autocomplete="off" spellcheck="false" oninput="markDirty()">
+            <button class="browse-btn" onclick="openBrowser('backup_dir')" title="Browse">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="path-field">
+          <label class="path-label" for="input-stacks-dir">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline;vertical-align:-.1em"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Dockge stacks dir
+          </label>
+          <div class="path-input-row">
+            <input class="path-input" id="input-stacks-dir" type="text" autocomplete="off" spellcheck="false" oninput="markDirty()">
+            <button class="browse-btn" onclick="openBrowser('stacks_dir')" title="Browse">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- save bar: only appears when paths are edited -->
+      <div class="save-bar" id="save-bar">
+        <span>Unsaved path changes</span>
+        <button onclick="savePaths()">Save</button>
+        <div id="save-result" style="font-size:.78125rem;color:var(--success)"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <div id="log-wrap">
+    <div class="log-header">
+      <span class="log-meta" id="log-meta">Output</span>
+      <button id="btn-clear" onclick="clearLog()">Clear</button>
+    </div>
+    <pre id="log" role="log" aria-live="polite" aria-label="Backup output"></pre>
+  </div>
+</main>
+
+<!-- ── File browser modal ───────────────────────────────────────────── -->
+<div class="backdrop" id="backdrop" role="dialog" aria-modal="true" aria-label="Choose directory" onclick="backdropClick(event)">
+  <div class="modal">
+    <div class="modal-head">
+      <span class="modal-head-title" id="browser-title">Choose directory</span>
+      <button class="modal-close" onclick="closeBrowser()" aria-label="Close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+
+    <!-- clickable breadcrumb -->
+    <div class="modal-crumb" id="browser-crumb"></div>
+
+    <div class="modal-body">
+      <ul class="dir-list" id="browser-list"></ul>
+    </div>
+
+    <div class="modal-foot">
+      <div class="modal-cur" id="browser-cur-path">—</div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeBrowser()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmBrowser()">Select this folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Theme ─────────────────────────────────────────────────────────────────────
+(function(){
+  const r=document.documentElement;
+  let d=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
+  r.setAttribute('data-theme',d);
+  const t=document.querySelector('[data-theme-toggle]');
+  const sun='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>';
+  const moon='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+  function apply(){t.innerHTML=d==='dark'?sun:moon}apply();
+  t.addEventListener('click',()=>{d=d==='dark'?'light':'dark';r.setAttribute('data-theme',d);apply()});
+})();
+
+// ── Load config ───────────────────────────────────────────────────────────────
+async function loadConfig(){
+  try{
+    const r=await fetch('/config');
+    const cfg=await r.json();
+    document.getElementById('input-backup-dir').value=cfg.backup_dir||'';
+    document.getElementById('input-stacks-dir').value=cfg.stacks_dir||'';
+    _savedBackup=cfg.backup_dir||'';
+    _savedStacks=cfg.stacks_dir||'';
+  }catch(e){console.warn('config load failed',e)}
+}
+let _savedBackup='', _savedStacks='';
+loadConfig();
+
+// ── Dirty state ───────────────────────────────────────────────────────────────
+function markDirty(){
+  const bd=document.getElementById('input-backup-dir').value.trim();
+  const sd=document.getElementById('input-stacks-dir').value.trim();
+  const dirty=(bd!==_savedBackup)||(sd!==_savedStacks);
+  document.getElementById('save-bar').classList.toggle('show', dirty);
+  document.getElementById('save-result').textContent='';
+}
+
+async function savePaths(){
+  const body={
+    backup_dir:document.getElementById('input-backup-dir').value.trim(),
+    stacks_dir:document.getElementById('input-stacks-dir').value.trim(),
+  };
+  const res=await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const data=await res.json();
+  const r=document.getElementById('save-result');
+  if(data.ok){
+    r.textContent='✓ Saved';
+    _savedBackup=body.backup_dir;_savedStacks=body.stacks_dir;
+    document.getElementById('save-bar').classList.remove('show');
+    setTimeout(()=>{r.textContent=''},2000);
+  }else{r.textContent='Error: '+data.error;r.style.color='var(--error)'}
+}
+
+// ── Flags ─────────────────────────────────────────────────────────────────────
+const exclusive=[['--copy-all','--reject-all'],['--archive','--archive-replace']];
+function toggleFlag(btn){
+  const flag=btn.dataset.flag,was=btn.classList.contains('active');
+  for(const g of exclusive) if(g.includes(flag)) g.forEach(f=>document.querySelector(`[data-flag="${f}"]`)?.classList.remove('active'));
+  btn.classList.toggle('active',!was);
+}
+function getFlags(){return Array.from(document.querySelectorAll('.flag-toggle.active')).map(b=>b.dataset.flag)}
+
+// ── Status ────────────────────────────────────────────────────────────────────
+function setStatus(state,text){
+  const b=document.getElementById('status-badge');
+  b.className=state;b.querySelector('#status-text').textContent=text;
+  b.querySelector('.dot').className='dot'+(state==='running'?' pulse':'');
+}
+
+// ── Log ────────────────────────────────────────────────────────────────────────
+const logEl=document.getElementById('log');
+const logWrap=document.getElementById('log-wrap');
+function ansiToHtml(raw){
+  const map={'32':'ansi-green','33':'ansi-yellow','31':'ansi-red','36':'ansi-blue','1':'ansi-bold'};
+  let html='';
+  const parts=raw.replace(/\x1b\[([0-9;]*)m/g,'\x00$1\x00').split('\x00');
+  parts.forEach((p,i)=>{
+    if(i%2===1){const cls=p.split(';').map(c=>map[c]||'').filter(Boolean).join(' ');html+=cls?`</span><span class="${cls}">`:'';}
+    else html+=p.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  });
+  return html;
+}
+function appendLog(line){logWrap.classList.add('visible');logEl.innerHTML+=ansiToHtml(line)+'\n';logEl.scrollTop=logEl.scrollHeight}
+function clearLog(){logEl.innerHTML='';logWrap.classList.remove('visible')}
+
+// ── Run backup (SSE) ──────────────────────────────────────────────────────────
+let es=null;
+function runBackup(){
+  if(es){es.close();es=null}
+  clearLog();
+  const flags=getFlags();
+  const btn=document.getElementById('btn-backup');
+  btn.disabled=true;setStatus('running','Running…');
+  document.getElementById('log-meta').textContent='Output — started '+new Date().toLocaleTimeString();
+
+  const qs=flags.length?'?flags='+encodeURIComponent(flags.join(' ')):'';
+  es=new EventSource('/stream'+qs);
+  es.addEventListener('line',e=>appendLog(JSON.parse(e.data)));
+  es.addEventListener('done',e=>{
+    const code=parseInt(e.data,10);es.close();es=null;btn.disabled=false;
+    setStatus(code===0?'ok':'error',code===0?'Completed ✓':'Failed (exit '+code+')');
+    appendLog('\n--- backup exited with code '+code+' ---');
+    document.getElementById('log-meta').textContent='Output — finished '+new Date().toLocaleTimeString();
+  });
+  es.onerror=()=>{es.close();es=null;btn.disabled=false;setStatus('error','Connection lost');appendLog('\n--- connection lost ---')};
+}
+
+// ── File browser ──────────────────────────────────────────────────────────────
+let _browserTarget=null;
+let _browserCurrent='/';
+
+const folderIcon='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+const upIcon='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>';
+
+function openBrowser(target){
+  _browserTarget=target;
+  const label=target==='backup_dir'?'Backup output directory':'Dockge stacks directory';
+  document.getElementById('browser-title').textContent='Choose: '+label;
+  const cur=document.getElementById(target==='backup_dir'?'input-backup-dir':'input-stacks-dir').value.trim();
+  browseTo(cur||'/');
+  document.getElementById('backdrop').classList.add('open');
+}
+function closeBrowser(){document.getElementById('backdrop').classList.remove('open');_browserTarget=null}
+function backdropClick(e){if(e.target===e.currentTarget)closeBrowser()}
+
+function buildBreadcrumb(path){
+  const crumb=document.getElementById('browser-crumb');
+  const parts=path.split('/').filter(Boolean);
+  let html='<span class="crumb-seg" data-nav="/">/ </span>';
+  let acc='';
+  parts.forEach((p,i)=>{
+    acc+='/'+p;
+    const isLast=(i===parts.length-1);
+    html+='<span class="crumb-sep">/</span>'
+         +'<span class="crumb-seg'+(isLast?' active':'')+'" data-nav="'+acc+'">'+p+'</span>';
+  });
+  crumb.innerHTML=html;
+}
+
+async function browseTo(path){
+  _browserCurrent=path;
+  document.getElementById('browser-cur-path').textContent=path;
+  buildBreadcrumb(path);
+
+  const list=document.getElementById('browser-list');
+  list.innerHTML='<li class="dir-item"><span class="spin">↻</span>  Loading…</li>';
+
+  try{
+    const res=await fetch('/ls?path='+encodeURIComponent(path));
+    const data=await res.json();
+    if(data.error){list.innerHTML='<li class="dir-empty">'+data.error+'</li>';return}
+
+    let html='';
+    if(data.parent!==data.path){
+      html+='<li class="dir-item is-up" data-nav="'+data.parent+'">'+upIcon+' .. (up one level)</li>';
+    }
+    if(data.entries.length===0){
+      html+='<li class="dir-empty">No subdirectories here</li>';
+    }
+    for(const e of data.entries){
+      html+='<li class="dir-item is-folder" data-nav="'+e.path+'">'+folderIcon+' '+e.name+'</li>';
+    }
+    list.innerHTML=html;
+  }catch(err){
+    list.innerHTML='<li class="dir-empty">Error: '+err+'</li>';
+  }
+}
+
+// Delegated listener — any element with data-nav inside the open modal navigates
+document.addEventListener('click', function(e){
+  const el=e.target.closest('[data-nav]');
+  if(!el) return;
+  if(!document.getElementById('backdrop').classList.contains('open')) return;
+  browseTo(el.dataset.nav);
+});
+
+function confirmBrowser(){
+  if(!_browserTarget)return;
+  const inputId=_browserTarget==='backup_dir'?'input-backup-dir':'input-stacks-dir';
+  document.getElementById(inputId).value=_browserCurrent;
+  markDirty();
+  closeBrowser();
+}
+</script>
+</body>
+</html>
+"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        print(f"[{self.address_string()}] {fmt % args}")
+
+    def _check_secret(self):
+        if not SECRET: return True
+        token = self.headers.get("X-Backuper-Token","")
+        if not token:
+            qs = urlparse(self.path).query
+            token = dict(p.split("=",1) for p in qs.split("&") if "=" in p).get("token","")
+        return token == SECRET
+
+    def do_GET(self):
+        p = urlparse(self.path).path
+        if p in ("/","/index.html"): self._page()
+        elif p == "/stream":         self._sse()
+        elif p == "/status":         self._json_status()
+        elif p == "/config":         self._get_config()
+        elif p == "/ls":             self._ls()
+        else:                        self.send_error(404)
+
+    def do_POST(self):
+        p = urlparse(self.path).path
+        if p == "/run":    self._start_run()
+        elif p == "/config": self._set_config()
+        else:                self.send_error(404)
+
+    def _page(self):
+        b = PAGE.encode()
+        self.send_response(200)
+        self.send_header("Content-Type","text/html; charset=utf-8")
+        self.send_header("Content-Length", len(b))
+        self.end_headers(); self.wfile.write(b)
+
+    def _json(self, data, status=200):
+        b = json.dumps(data).encode()
+        self.send_response(status)
+        self.send_header("Content-Type","application/json")
+        self.send_header("Content-Length", len(b))
+        self.end_headers(); self.wfile.write(b)
+
+    def _json_status(self):
+        with _lock:
+            self._json({k: _job[k] for k in ("running","exit_code","started")})
+
+    def _get_config(self):
+        with _config_lock:
+            self._json(dict(_config))
+
+    def _set_config(self):
+        if not self._check_secret(): self.send_error(403); return
+        length = int(self.headers.get("Content-Length",0))
+        body = self.rfile.read(length).decode() if length else "{}"
+        try: data = json.loads(body)
+        except Exception: self._json({"ok":False,"error":"Invalid JSON"},400); return
+        with _config_lock:
+            if "backup_dir" in data: _config["backup_dir"] = data["backup_dir"]
+            if "stacks_dir" in data: _config["stacks_dir"] = data["stacks_dir"]
+        self._json({"ok": True})
+
+    def _ls(self):
+        qs = parse_qs(urlparse(self.path).query)
+        path = qs.get("path", ["/"])[0]
+        result, err = _ls_dir(path)
+        self._json({"error": err} if err else result)
+
+    def _sse(self):
+        if not self._check_secret(): self.send_error(403); return
+        qs = urlparse(self.path).query
+        params = dict(p.split("=",1) for p in qs.split("&") if "=" in p)
+        raw = params.get("flags","")
+        extra = [f for f in raw.split() if f.startswith("--")] if raw else []
+        with _lock:
+            if _job["running"]: self.send_error(409,"Already running"); return
+        threading.Thread(target=_run_backup, args=(extra,), daemon=True).start()
+        self.send_response(200)
+        self.send_header("Content-Type","text/event-stream")
+        self.send_header("Cache-Control","no-cache")
+        self.send_header("X-Accel-Buffering","no")
+        self.end_headers()
+        sent = 0
+        try:
+            while True:
+                with _lock:
+                    new = _job["log"][sent:]
+                    running = _job["running"]
+                    code = _job["exit_code"]
+                for line in new:
+                    self.wfile.write(f"event: line\ndata: {json.dumps(line)}\n\n".encode())
+                    sent += 1
+                self.wfile.flush()
+                if not running and code is not None:
+                    self.wfile.write(f"event: done\ndata: {code}\n\n".encode())
+                    self.wfile.flush()
+                    break
+                time.sleep(0.15)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _start_run(self):
+        if not self._check_secret(): self.send_error(403); return
+        length = int(self.headers.get("Content-Length",0))
+        body = self.rfile.read(length).decode() if length else "{}"
+        try: data = json.loads(body)
+        except Exception: data = {}
+        extra = [f for f in data.get("flags",[]) if f.startswith("--")]
+        with _lock:
+            if _job["running"]: self.send_error(409); return
+        threading.Thread(target=_run_backup, args=(extra,), daemon=True).start()
+        self._json({"status":"started"}, 202)
+
+
+if __name__ == "__main__":
+    if not os.path.isfile(BACKUP_SH):
+        print(f"WARNING: backup.sh not found at {BACKUP_SH}")
+    else:
+        print(f"backup.sh found: {BACKUP_SH}")
+    server = HTTPServer((HOST, PORT), Handler)
+    print(f"Backuper Web UI  →  http://{HOST}:{PORT}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
