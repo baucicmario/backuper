@@ -2,9 +2,7 @@
 """
 webui.py — Minimal HTTP server for backuper.
 """
-import os, subprocess, threading, time, json, stat, tarfile, io
-import threading
-import time
+import os, subprocess, threading, time, json, stat, tarfile, io, shutil
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import socketserver
@@ -88,12 +86,6 @@ class ProgressWrapper:
             self.pos += len(chunk)
             with _restore_lock:
                 _restore_job["sub_progress"] = self.pos
-            
-            # Debug: Report to UI log every 5MB
-            if self.pos - self.last_report > 5 * 1024 * 1024:
-                self.last_report = self.pos
-                with _lock:
-                    _job["log"].append(f"[DEBUG] Extraction Progress: {self.pos / (1024*1024):.1f}MB")
         return chunk
     def tell(self): return self.pos
     def seek(self, offset, whence=0): return self.fileobj.seek(offset, whence)
@@ -139,10 +131,7 @@ def _run_restore(selected, backup_dir, split_dir):
                         for member in members:
                             with _restore_lock:
                                 _restore_job["sub_current_file"] = member.name
-                                # f_wrapped.tell() will be updated during the actual read inside extractall
                             yield member
-
-                    # Use the community-suggested generator approach
                     tar.extractall(path=target_folder, members=track_progress(tar))
             
             with _lock:
@@ -150,7 +139,6 @@ def _run_restore(selected, backup_dir, split_dir):
                 
             os.remove(path)
             
-            # Find and run restore.sh
             restore_script = None
             if os.path.exists(os.path.join(target_folder, "restore.sh")):
                 restore_script = os.path.join(target_folder, "restore.sh")
@@ -179,16 +167,20 @@ def _run_restore(selected, backup_dir, split_dir):
                                         text=True, bufsize=1)
                 for line in proc.stdout:
                     l = line.rstrip("\n")
-                    # CRITICAL: Buffer FIRST, then print.
-                    with _lock: 
-                        _job["log"].append(l)
+                    with _lock: _job["log"].append(l)
                     print(f"[{folder_name}] {l}")
                 proc.wait()
-                with _restore_lock: 
-                    _restore_job["sub_progress"] = 1
+                with _restore_lock: _restore_job["sub_progress"] = 1
                 results.append(f"Restored {folder_name}")
             else:
                 results.append(f"Warning: No restore.sh for {folder_name}")
+
+            # CLEANUP: Delete the folder we just restored
+            if os.path.isdir(target_folder):
+                with _lock:
+                    _job["log"].append(f"[DEBUG] Cleaning up folder: {target_folder}")
+                shutil.rmtree(target_folder)
+
         except Exception as e:
             with _lock:
                 _job["log"].append(f"[DEBUG] Error restoring {filename}: {str(e)}")
@@ -223,7 +215,6 @@ def _ls_dir(path):
 
 
 def _load_page():
-    """Load HTML page from file at startup."""
     try:
         with open(PAGE_FILE, "r", encoding="utf-8") as f:
             return f.read()
@@ -272,48 +263,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_batch_restore(self):
         if not self._check_secret(): self.send_error(403); return
-        
         length = int(self.headers.get("Content-Length", 0))
         data = json.loads(self.rfile.read(length).decode()) if length else {}
         selected = data.get("archives", [])
-        
         backup_dir = _config["backup_dir"]
         split_dir = os.path.join(backup_dir, "split_stacks")
-        
-        # Determine exactly what we are restoring BEFORE initializing state
         if not selected:
             if os.path.isdir(split_dir):
                 selected = [f for f in sorted(os.listdir(split_dir)) if f.endswith(".tar.gz")]
             else:
                 selected = []
-
         if not selected:
             self._json({"ok": False, "error": "No archives to restore"}, 400)
             return
-
         with _lock:
-            # CLEAR LOGS for new session
             _job["log"] = []
-            
         with _restore_lock:
             if _restore_job["running"]:
                 self._json({"ok": False, "error": "Restore already in progress"}, 409)
                 return
-            # INITIALIZE STATE synchronously with the CORRECT total count
             _restore_job.update({
-                "running": True, 
-                "restore_id": int(time.time()), 
-                "progress": 0, 
-                "total": len(selected), 
-                "current": "Preparing...", 
-                "phase": "starting", 
-                "sub_progress": 0, 
-                "sub_total": 0,
-                "sub_current_file": "", 
-                "results": [], 
-                "exit_code": None
+                "running": True, "restore_id": int(time.time()), "progress": 0, "total": len(selected), 
+                "current": "Preparing...", "phase": "starting", "sub_progress": 0, "sub_total": 0,
+                "sub_current_file": "", "results": [], "exit_code": None
             })
-
         threading.Thread(target=_run_restore, args=(selected, backup_dir, split_dir), daemon=True).start()
         self._json({"ok": True, "message": "Restore started"})
 
@@ -354,25 +327,20 @@ class Handler(BaseHTTPRequestHandler):
             if "stacks_dir" in data: _config["stacks_dir"] = data["stacks_dir"]
         self._json({"ok": True})
 
-
     def _handle_upload(self):
         if not self._check_secret(): self.send_error(403); return
         qs = parse_qs(urlparse(self.path).query)
         filename = qs.get("filename", ["uploaded_archive.tar.gz"])[0]
         filename = os.path.basename(filename)
-        
         length = int(self.headers.get("Content-Length", 0))
         if length == 0:
             self._json({"ok": False, "error": "Empty file received"}, 400)
             return
-            
         with _config_lock:
             backup_dir = _config["backup_dir"]
-            
         split_dir = os.path.join(backup_dir, "split_stacks")
         os.makedirs(split_dir, exist_ok=True)
         target_path = os.path.join(split_dir, filename)
-        
         try:
             with open(target_path, 'wb') as f:
                 bytes_read = 0
@@ -385,7 +353,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json({"ok": False, "error": f"Failed to save file: {str(e)}"}, 500)
             return
-
         try:
             is_bundle = False
             if tarfile.is_tarfile(target_path):
@@ -396,11 +363,9 @@ class Handler(BaseHTTPRequestHandler):
                         parts = m.name.split('/')
                         if parts and parts[0]:
                             top_levels.add(parts[0])
-                    
                     if len(top_levels) > 1:
                         is_bundle = True
                         tar.extractall(path=split_dir)
-                
                 if is_bundle:
                     os.remove(target_path)
                     self._json({"ok": True, "message": f"Extracted bundle: {filename}"})
@@ -422,7 +387,6 @@ class Handler(BaseHTTPRequestHandler):
         qs = urlparse(self.path).query
         params = dict(p.split("=",1) for p in qs.split("&") if "=" in p)
         mode = params.get("mode", "run")
-        
         if mode == "run":
             raw = params.get("flags","")
             extra = [f for f in raw.split() if f.startswith("--")] if raw else []
@@ -430,50 +394,36 @@ class Handler(BaseHTTPRequestHandler):
                 if _job["running"] or _restore_job["running"]: 
                     self.send_error(409,"Process already running"); return
             threading.Thread(target=_run_backup, args=(extra,), daemon=True).start()
-        
         self.send_response(200)
         self.send_header("Content-Type","text/event-stream")
         self.send_header("Cache-Control","no-cache")
         self.send_header("X-Accel-Buffering","no")
         self.end_headers()
-        
         sent_log = 0
         last_status_json = ""
         last_heartbeat = time.time()
-        
         try:
             while True:
                 now = time.time()
-                # 1. Send all new log lines
                 with _lock:
                     new_logs = _job["log"][sent_log:]
                 for line in new_logs:
                     self.wfile.write(f"event: log\ndata: {json.dumps(line)}\n\n".encode())
                     sent_log += 1
-                
-                # 2. Send status update
                 with _restore_lock:
-                    status = dict(_restore_job)
-                status_json = json.dumps(status)
+                    status_json = json.dumps(_restore_job)
                 if status_json != last_status_json:
                     self.wfile.write(f"event: status\ndata: {status_json}\n\n".encode())
                     last_status_json = status_json
-                
-                # 3. Heartbeat to keep connection alive
                 if now - last_heartbeat > 15:
                     self.wfile.write(b": heartbeat\n\n")
                     last_heartbeat = now
-
                 self.wfile.flush()
-                
-                # 4. Check for completion
                 with _lock:
                     with _restore_lock:
                         still_running = _job["running"] or _restore_job["running"]
                         has_more_logs = (len(_job["log"]) > sent_log)
-                
                 if not still_running and not has_more_logs:
-                    # Send final status one last time to be sure
                     self.wfile.write(f"event: status\ndata: {status_json}\n\n".encode())
                     self.wfile.write(f"event: done\ndata: 0\n\n".encode())
                     self.wfile.flush()
@@ -509,15 +459,16 @@ class Handler(BaseHTTPRequestHandler):
         split_dir = os.path.join(backup_dir, "split_stacks")
         results = []
         base = split_dir if os.path.isdir(split_dir) else backup_dir
-        for fname in sorted(os.listdir(base)):
-            if fname.endswith(".tar.gz"):
-                fpath = os.path.join(base, fname)
-                try:
-                    size = os.path.getsize(fpath)
-                    mtime = os.path.getmtime(fpath)
-                    rel = os.path.relpath(fpath, backup_dir)
-                    results.append({"name": fname, "rel": rel, "size": size, "mtime": mtime})
-                except OSError: continue
+        if os.path.isdir(base):
+            for fname in sorted(os.listdir(base)):
+                if fname.endswith(".tar.gz"):
+                    fpath = os.path.join(base, fname)
+                    try:
+                        size = os.path.getsize(fpath)
+                        mtime = os.path.getmtime(fpath)
+                        rel = os.path.relpath(fpath, backup_dir)
+                        results.append({"name": fname, "rel": rel, "size": size, "mtime": mtime})
+                    except OSError: continue
         self._json({"archives": results, "backup_dir": backup_dir})
 
     def _download_file(self, rel_encoded):
@@ -549,6 +500,8 @@ class Handler(BaseHTTPRequestHandler):
             backup_dir = _config["backup_dir"]
         split_dir = os.path.join(backup_dir, "split_stacks")
         base = split_dir if os.path.isdir(split_dir) else backup_dir
+        if not os.path.isdir(base):
+            self.send_error(404, "No archives found"); return
         archives = [os.path.join(base, f) for f in os.listdir(base) if f.endswith(".tar.gz")]
         if not archives: self.send_error(404); return
         ts = time.strftime("%Y%m%d_%H%M%S")
