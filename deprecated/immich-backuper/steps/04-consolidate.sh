@@ -30,7 +30,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../../lib/common.sh"
+source "$SCRIPT_DIR/../../../lib/common.sh"
 
 # ── Source state (optional — only needed for context logging) ─────────────────
 if [[ -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]]; then

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../../lib/common.sh"
+source "$SCRIPT_DIR/../../../lib/common.sh"
 
 # ── Source state ──────────────────────────────────────────────────────────────
 STATE_FILE="${STATE_FILE:?STATE_FILE must be set by the orchestrator}"

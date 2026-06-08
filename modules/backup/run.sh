@@ -5,10 +5,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../../lib/common.sh"
 
 # Shorthand for tasks directory
-T="$SCRIPT_DIR/tasks"
+S="$SCRIPT_DIR/steps"
 
 # ── Configuration with sensible defaults ──────────────────────
 # Source stacks directory (where Dockge stores stack configs)
@@ -41,7 +41,7 @@ SERVICE_DIRS=()  # Track all extracted service directories
 # ────────────────────────────────────────────────────────────────────────────
 # STEP 1 — Discover all Dockge stacks
 # ────────────────────────────────────────────────────────────────────────────
-mapfile -t STACK_DIRS < <(bash "$T/01-discover-stacks.sh" "$DOCKGE_STACKS_DIR")
+mapfile -t STACK_DIRS < <(bash "$S/01-discover-stacks.sh" "$DOCKGE_STACKS_DIR")
 
 # ────────────────────────────────────────────────────────────────────────────
 # STEP 2 — Extract services from each stack
@@ -50,17 +50,17 @@ for stack_dir in "${STACK_DIRS[@]}"; do
   compose_file="$stack_dir/compose.yaml"
   env_file="$stack_dir/.env"
 
-  mapfile -t SERVICES < <(bash "$T/02-extract-services.sh" "$compose_file")
+  mapfile -t SERVICES < <(bash "$S/02-extract-services.sh" "$compose_file")
 
   for service in "${SERVICES[@]}"; do
     # Create isolated service folder with its docker-compose.yml
-    out_dir="$OUTPUT_DIR/$(bash "$T/03-create-service-compose.sh" "$compose_file" "$service" "$OUTPUT_DIR" "$DRY_RUN" "$FORCE")"
+    out_dir="$OUTPUT_DIR/$(bash "$S/03-create-service-compose.sh" "$compose_file" "$service" "$OUTPUT_DIR" "$DRY_RUN" "$FORCE")"
     # Extract filtered .env variables used by this service
-    bash "$T/04-extract-env.sh"    "$out_dir" "$env_file"
+    bash "$S/04-extract-env.sh"    "$out_dir" "$env_file"
     # Write metadata about where this service came from
-    bash "$T/05-write-metadata.sh" "$out_dir" "$stack_dir" "$service"
+    bash "$S/05-write-metadata.sh" "$out_dir" "$stack_dir" "$service"
     # Generate a restore.sh script to merge this service back
-    bash "$T/07-write-restore.sh"  "$out_dir" "$DOCKGE_STACKS_DIR"
+    bash "$S/07-write-restore.sh"  "$out_dir" "$DOCKGE_STACKS_DIR"
     SERVICE_DIRS+=("$out_dir")  # Track for next phase
   done
 done
@@ -69,7 +69,7 @@ done
 # STEP 3 — Copy bind-mounted data into each service folder
 # ────────────────────────────────────────────────────────────────────────────
 for service_dir in "${SERVICE_DIRS[@]}"; do
-  bash "$T/06-copy-bind-mounts.sh" "$service_dir" "$MOUNT_MODE"
+  bash "$S/06-copy-bind-mounts.sh" "$service_dir" "$MOUNT_MODE"
 done
 
 # ────────────────────────────────────────────────────────────────────────────

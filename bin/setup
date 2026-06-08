@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# bin/setup — Canonical setup command.
+# Thin wrapper around modules/setup; use setup.sh at repo root for convenience.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$SCRIPT_DIR/lib/runner.sh"
+run_phase "$SCRIPT_DIR/modules/setup" "setup" "$@"

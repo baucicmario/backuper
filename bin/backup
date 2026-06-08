@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# bin/backup — Canonical backup command.
+# Thin wrapper around modules/backup/run.sh; use backup.sh at repo root for convenience.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$SCRIPT_DIR/modules/backup/run.sh" "$@"

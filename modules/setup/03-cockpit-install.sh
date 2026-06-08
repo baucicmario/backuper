@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../../lib/common.sh"
 
 # Create temporary directory for downloading .debs; clean up on exit
 TMP_DIR="$(mktemp -d /tmp/cockpit-suite.XXXX)"

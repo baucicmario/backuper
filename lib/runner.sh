@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lib/run_phase.sh — Phase execution framework
+# lib/runner.sh — Phase execution framework
 # Provides the run_phase function that discovers and executes all scripts
 # in a directory in sorted order, with support for exclusions and dry-runs.
 set -euo pipefail

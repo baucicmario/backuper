@@ -23,7 +23,7 @@ MOUNT_MODE="${2:-prompt}"
 COMPOSE_FILE="$SERVICE_DIR/docker-compose.yml"
 ENV_FILE="$SERVICE_DIR/.env"
 META_FILE="$SERVICE_DIR/.stack-meta"
-KNOWN_LIST="$SCRIPT_DIR/known-config-mounts.txt"
+KNOWN_LIST="$SCRIPT_DIR/../data/known-config-mounts.txt"
 SIZE_THRESHOLD_MB=50
 
 [[ -f "$COMPOSE_FILE" ]] || { warn "No docker-compose.yml in $SERVICE_DIR — skipping"; exit 0; }
