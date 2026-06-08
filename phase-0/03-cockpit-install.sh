@@ -7,16 +7,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 
+# Create temporary directory for downloading .debs; clean up on exit
 TMP_DIR="$(mktemp -d /tmp/cockpit-suite.XXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 bold "${GREEN}🧰 Cockpit Suite Installer${RESET}"
 line
 
+# Check for sudo access and detect the package manager
 require_sudo
 detect_pkg_manager
 
-# ── Load OS info ──────────────────────────
+# ── Load OS info ──────────────────────────────────────────────
+# Read /etc/os-release to get distribution details
 # shellcheck source=/dev/null
 source /etc/os-release
 CODENAME="${VERSION_CODENAME:-}"
@@ -32,6 +35,7 @@ if [ $# -gt 0 ]; then
 else
   ensure_cmd whiptail whiptail
 
+  # Helper function to check if a package is installed (for TUI checklist)
   is_installed() { dpkg -l "$1" &>/dev/null && echo "ON" || echo "OFF"; }
 
   OPTIONS=(
@@ -45,6 +49,7 @@ else
     "cockpit-identities"      "User & group management (45Drives)"  "$(is_installed cockpit-identities)"
   )
 
+  # Launch whiptail checklist; redirect stdin/stdout/stderr for proper terminal handling
   raw_selection=$(whiptail \
     --title "Cockpit Suite Modules" \
     --checklist "Select Cockpit components (SPACE = select, ENTER = confirm)" \
@@ -52,7 +57,7 @@ else
     "${OPTIONS[@]}" \
     3>&1 1>&2 2>&3) || { warn "Selection cancelled — nothing will be installed."; exit 0; }
 
-  # whiptail wraps each item in quotes; strip them and split into array
+  # Parse whiptail output: it returns quoted strings, so strip quotes and split
   IFS=' ' read -r -a SELECTED <<< "$(echo "$raw_selection" | tr -d '"')"
 
   if [ ${#SELECTED[@]} -eq 0 ]; then
@@ -65,9 +70,10 @@ fi
 
 line
 
-# ── Install Cockpit core ──────────────────
+# ── Step 1: Install Cockpit core and jq ───────────────────
 info "Installing Cockpit core + jq..."
-apt_update_once
+apt_update_once  # Update package lists once
+# Try to install from backports if available for newer versions
 if apt-cache policy cockpit 2>/dev/null | grep -q "${CODENAME}-backports"; then
   $SUDO apt-get install -y -t "${CODENAME}-backports" cockpit jq
 else
@@ -76,7 +82,8 @@ fi
 ok "Cockpit core installed."
 line
 
-# ── 45Drives GitHub .deb installer ───────
+# ── Step 2: Install selected 45Drives modules ─────────────
+# Helper function to download and install a .deb from a 45Drives GitHub repo
 install_45drives_deb() {
   local repo="$1" pattern="$2" name="$3"
   info "Fetching latest release for ${repo}..."
