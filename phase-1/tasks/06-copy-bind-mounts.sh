@@ -99,14 +99,14 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
   # 1. Known config mount — always copy
   if is_known_config "$mount_name"; then
     info "Known config mount — copying: $host_path"
-    bash "$SCRIPT_DIR/07-copy-dir.sh" "$host_path" "$dest_path"
+    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
     continue
   fi
 
   # 2. copy-all — copy everything
   if [[ "$MOUNT_MODE" == "copy-all" ]]; then
     info "copy-all — copying: $host_path"
-    bash "$SCRIPT_DIR/07-copy-dir.sh" "$host_path" "$dest_path"
+    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
     continue
   fi
 
@@ -120,7 +120,7 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
   size_mb="$(du -sm "$host_path" 2>/dev/null | cut -f1)"
   if [[ "$size_mb" -le "$SIZE_THRESHOLD_MB" ]]; then
     info "Small mount (${size_mb}MB) — copying: $host_path"
-    bash "$SCRIPT_DIR/07-copy-dir.sh" "$host_path" "$dest_path"
+    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
     continue
   fi
 
@@ -132,7 +132,7 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
   printf "  Copy it? [y/N] "
   read -r answer </dev/tty
   if [[ "${answer,,}" == "y" ]]; then
-    bash "$SCRIPT_DIR/07-copy-dir.sh" "$host_path" "$dest_path"
+    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
   else
     warn "Skipped: $host_path"
   fi

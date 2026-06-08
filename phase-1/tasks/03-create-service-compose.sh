@@ -44,31 +44,41 @@ yq -n ".services.\"${SERVICE}\" = load(\"${COMPOSE_FILE}\").services.\"${SERVICE
   > "$out_compose"
 
 # ── Referenced networks ───────────────────────────────────────────────────────
-svc_networks="$(yq ".services.\"${SERVICE}\".networks | keys | .[]" "$COMPOSE_FILE" 2>/dev/null || true)"
-if [[ -n "$svc_networks" ]]; then
-  while IFS= read -r net; do
+# Networks can be a list (- media_network) or a map (media_network: {...})
+# List style: yq returns numeric indexes for keys, values are the network names
+# Map style:  yq returns network names as keys
+svc_networks_raw="$(yq ".services.\"${SERVICE}\".networks" "$COMPOSE_FILE" 2>/dev/null || true)"
+
+if [[ -n "$svc_networks_raw" && "$svc_networks_raw" != "null" ]]; then
+  # Detect list vs map: if it's a sequence, extract values; if map, extract keys
+  is_seq="$(yq ".services.\"${SERVICE}\".networks | type" "$COMPOSE_FILE" 2>/dev/null || true)"
+
+  if [[ "$is_seq" == "!!seq" ]]; then
+    # List style: - media_network
+    mapfile -t net_names < <(yq ".services.\"${SERVICE}\".networks[]" "$COMPOSE_FILE" 2>/dev/null || true)
+  else
+    # Map style: media_network: null or media_network: {aliases: [...]}
+    mapfile -t net_names < <(yq ".services.\"${SERVICE}\".networks | keys | .[]" "$COMPOSE_FILE" 2>/dev/null || true)
+  fi
+
+  for net in "${net_names[@]}"; do
     [[ -z "$net" || "$net" == "null" ]] && continue
-    [[ "$net" =~ ^[0-9]+$ ]] && continue
     net_def="$(yq ".networks.\"${net}\"" "$COMPOSE_FILE" 2>/dev/null || true)"
     if [[ -n "$net_def" && "$net_def" != "null" ]]; then
       yq -i ".networks.\"${net}\" = load(\"${COMPOSE_FILE}\").networks.\"${net}\"" "$out_compose"
     else
-      yq -i ".networks.\"${net}\" = null" "$out_compose"
+      yq -i ".networks.\"${net}\".driver = \"bridge\"" "$out_compose"
     fi
-  done <<< "$svc_networks"
+  done
 fi
 
 # ── Referenced named volumes (skip bind mounts) ───────────────────────────────
-# Strategy: skip anything whose source starts with / . ~ or $ (env var = bind mount path)
-# No eval needed — just string pattern matching on the raw value
 svc_volumes_raw="$(yq ".services.\"${SERVICE}\".volumes[]" "$COMPOSE_FILE" 2>/dev/null || true)"
 if [[ -n "$svc_volumes_raw" ]]; then
   while IFS= read -r vol_entry; do
     [[ -z "$vol_entry" || "$vol_entry" == "null" ]] && continue
     vol_src="$(printf '%s' "$vol_entry" | cut -d: -f1)"
-    # Skip bind mounts: absolute paths, relative paths, tilde, or env var references
     [[ "$vol_src" =~ ^[/\.~\$] ]] && continue
-    # What's left is a true named volume (e.g. "app_data", "db_vol")
     vol_def="$(yq ".volumes.\"${vol_src}\"" "$COMPOSE_FILE" 2>/dev/null || true)"
     if [[ -n "$vol_def" && "$vol_def" != "null" ]]; then
       yq -i ".volumes.\"${vol_src}\" = load(\"${COMPOSE_FILE}\").volumes.\"${vol_src}\"" "$out_compose"
@@ -77,6 +87,9 @@ if [[ -n "$svc_volumes_raw" ]]; then
     fi
   done <<< "$svc_volumes_raw"
 fi
+
+# ── Strip empty/null top-level blocks (volumes only — networks always get a definition now) ──
+yq -i 'del(.volumes | select(. == {} or . == null))' "$out_compose" 2>/dev/null || true
 
 # Print folder name to the real stdout (fd3) so the orchestrator can capture it
 echo "$folder_name" >&3

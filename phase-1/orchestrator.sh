@@ -43,6 +43,7 @@ for stack_dir in "${STACK_DIRS[@]}"; do
     out_dir="$OUTPUT_DIR/$(bash "$T/03-create-service-compose.sh" "$compose_file" "$service" "$OUTPUT_DIR" "$DRY_RUN" "$FORCE")"
     bash "$T/04-extract-env.sh"    "$out_dir" "$env_file"
     bash "$T/05-write-metadata.sh" "$out_dir" "$stack_dir" "$service"
+    bash "$T/07-write-restore.sh"  "$out_dir" "$DOCKGE_STACKS_DIR"
     SERVICE_DIRS+=("$out_dir")
   done
 done

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tasks/07-copy-dir.sh
+# tasks/08-copy-dir.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,13 +16,11 @@ fi
 mkdir -p "$DST"
 stderr_file="$(mktemp)"
 
-# Attempt 1: full archive
 if cp -a "$SRC/." "$DST/" 2>"$stderr_file"; then
   ok "Copied: $SRC → $DST"
   rm -f "$stderr_file"; exit 0
 fi
 
-# Attempt 2: data-only (NTFS/WSL metadata not supported)
 if grep -qE 'preserving (times|permissions|ownership)' "$stderr_file"; then
   info "  (destination does not support metadata — retrying data-only)"
   if cp -r "$SRC/." "$DST/" 2>"$stderr_file"; then
@@ -35,7 +33,6 @@ if grep -qE 'preserving (times|permissions|ownership)' "$stderr_file"; then
   fi
 fi
 
-# Attempt 3: permission denied — retry with sudo
 if grep -q 'Permission denied' "$stderr_file"; then
   info "  (permission denied — retrying with sudo)"
   if sudo cp -r "$SRC/." "$DST/" 2>"$stderr_file"; then
@@ -44,7 +41,6 @@ if grep -q 'Permission denied' "$stderr_file"; then
   fi
 fi
 
-# All attempts failed — warn and continue
 warn "Could not copy: $SRC → $DST"
 cat "$stderr_file" >&2
 rm -f "$stderr_file"
