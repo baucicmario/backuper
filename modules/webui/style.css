@@ -74,6 +74,8 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
 .btn-primary:hover:not(:disabled){background:var(--primary-h)}
 .btn-secondary{background:var(--surface-3);color:var(--text);border:1px solid var(--border)}
 .btn-secondary:hover:not(:disabled){border-color:var(--primary);color:var(--primary);background:var(--surface-2)}
+.btn-restore-stub {background:var(--warning);color:var(--surface-1);border:1px solid var(--warning)}
+.btn-restore-stub:hover:not(:disabled){background:var(--warning-h);border-color:var(--warning-h)}
 .btn-ghost{background:var(--surface-3);color:var(--text);border:1px solid var(--border)}
 .btn-ghost:hover{border-color:var(--primary);color:var(--primary)}
 .btn-lg{padding:.75rem 1.75rem;font-size:.9375rem}
