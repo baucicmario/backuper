@@ -29,9 +29,9 @@ source "$STATE_FILE"
 
 BACKUP_ROOT="${BACKUP_ROOT:?BACKUP_ROOT must be set by the orchestrator}"
 RUN_ID="${RUN_ID:?RUN_ID must be set by the orchestrator}"
-BACKUP_DIR="$BACKUP_ROOT/$RUN_ID"
+BACKUP_DIR="$CENTRAL_BACKUP_DIR/split_stacks/immich__${POSTGRES_SERVICE}"
+[[ -d "$BACKUP_DIR" ]] || die "Phase 1 output not found: $BACKUP_DIR — run phase1.sh first"
 
-mkdir -p "$BACKUP_DIR"
 load_env "$IMMICH_ENV_FILE"
 
 # ── Docker helpers ────────────────────────────────────────────────────────────
