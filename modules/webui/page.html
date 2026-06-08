@@ -209,12 +209,10 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
           Run Backup Now
         </button>
         <div class="flags">
-          <button class="flag-toggle" data-flag="--copy-all" onclick="toggleFlag(this)" title="Copy all bind mounts without prompting">copy-all</button>
-          <button class="flag-toggle" data-flag="--reject-all" onclick="toggleFlag(this)" title="Skip all bind mounts (config only)">reject-all</button>
-          <button class="flag-toggle" data-flag="--dry-run" onclick="toggleFlag(this)" title="Show what would happen, write nothing">dry-run</button>
-          <button class="flag-toggle" data-flag="--force" onclick="toggleFlag(this)" title="Overwrite existing output folders">force</button>
-          <button class="flag-toggle" data-flag="--archive" onclick="toggleFlag(this)" title="Pack each service dir into .tar.gz">archive</button>
-          <button class="flag-toggle" data-flag="--archive-replace" onclick="toggleFlag(this)" title="Pack and remove source dirs">archive-replace</button>
+          <button class="flag-toggle" data-flag="--copy-all" onclick="toggleFlag(this)" title="Copy all bind mounts without prompting">copy-all-mounts</button>
+          <button class="flag-toggle" data-flag="--reject-all" onclick="toggleFlag(this)" title="Skip all bind mounts (config only)">config-mounts-only</button>
+          <button class="flag-toggle" data-flag="--force" onclick="toggleFlag(this)" title="Overwrite existing output folders">overwrite-existing-folders</button>
+          <button class="flag-toggle" data-flag="--archive" onclick="toggleFlag(this)" title="Pack each service dir into .tar.gz">archive-with folders</button>
         </div>
       </div>
 
