@@ -217,8 +217,26 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
             Restore Stack
           </button>
-          <div id="progress-container"><div id="progress-bar"></div></div>
-          <div id="progress-text">Initializing...</div>
+          <div id="restore-progress-wrap" style="display: none; width: 100%; margin-top: 1rem; background: var(--surface-2); padding: 0.75rem; border-radius: var(--radius); border: 1px solid var(--border);">
+            <!-- Overall Progress -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+              <span id="restore-status-text" style="font-size: 0.75rem; font-weight: 600; color: var(--text);">Overall Progress</span>
+              <span id="restore-percent" style="font-size: 0.75rem; font-family: var(--mono); color: var(--primary); font-weight: 600;">0%</span>
+            </div>
+            <div style="width: 100%; background: var(--surface-3); height: 6px; border-radius: 3px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 0.8rem;">
+              <div id="restore-progress-bar" style="width: 0%; background: var(--primary); height: 100%; transition: width 0.3s ease;"></div>
+            </div>
+
+            <!-- Sub-task Progress -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+              <span id="sub-status-text" style="font-size: 0.7rem; font-weight: 500; color: var(--muted);">Current Task</span>
+              <span id="sub-percent" style="font-size: 0.7rem; font-family: var(--mono); color: var(--warn); font-weight: 600;">0%</span>
+            </div>
+            <div style="width: 100%; background: var(--surface-3); height: 6px; border-radius: 3px; overflow: hidden; border: 1px solid var(--border);">
+              <div id="sub-progress-bar" style="width: 0%; background: var(--warn); height: 100%; transition: width 0.3s ease;"></div>
+            </div>
+            <div id="restore-current-file" style="margin-top: 0.5rem; font-size: 0.65rem; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
+          </div>
           <input type="file" id="restore-upload" style="display: none;" accept=".tar.gz,.zip" onchange="uploadArchive(event)">
         </div>
         
@@ -624,9 +642,99 @@ async function runBatchRestore() {
   if (!confirm(`Are you sure you want to restore ${selected.length > 0 ? selected.length : 'ALL'} archives?`)) return;
 
   const btn = document.getElementById('btn-restore-action');
+  const progressWrap = document.getElementById('restore-progress-wrap');
+  const progressBar = document.getElementById('restore-progress-bar');
+  const subProgressBar = document.getElementById('sub-progress-bar');
+  const statusText = document.getElementById('restore-status-text');
+  const subStatusText = document.getElementById('sub-status-text');
+  const percentText = document.getElementById('restore-percent');
+  const subPercentText = document.getElementById('sub-percent');
+  const currentFileText = document.getElementById('restore-current-file');
+
   btn.disabled = true;
   btn.textContent = 'Restoring...';
+  progressWrap.style.display = 'block';
+  statusText.textContent = 'Starting restore...';
+  progressBar.style.width = '0%';
+  subProgressBar.style.width = '0%';
+  percentText.textContent = '0%';
+  subPercentText.textContent = '0%';
+  currentFileText.textContent = '';
   
+  clearLog();
+  appendLog('--- Initializing Batch Restore ---');
+  
+  // Start UNIFIED status + log listener
+  const sse = new EventSource('/stream?mode=listen');
+  let lastPhase = 'starting';
+  
+  const getPhaseDebug = () => {
+    let el = document.getElementById('restore-phase-debug');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'restore-phase-debug';
+      el.style = 'font-size: 10px; color: var(--muted); margin-top: 5px; font-family: var(--mono); text-align: right; opacity: 0.6;';
+      progressWrap.appendChild(el);
+    }
+    return el;
+  };
+
+  sse.addEventListener('log', e => appendLog(JSON.parse(e.data)));
+  
+  sse.addEventListener('status', e => {
+    const status = JSON.parse(e.data);
+    lastPhase = status.phase;
+    getPhaseDebug().textContent = `PHASE: ${status.phase.toUpperCase()}`;
+
+    if (!status.running && status.phase !== 'complete') return;
+    
+    const overallPercent = status.total > 0 ? Math.round((status.progress / status.total) * 100) : 0;
+    statusText.textContent = `Overall: ${status.progress + 1} of ${status.total}`;
+    progressBar.style.width = overallPercent + '%';
+    percentText.textContent = overallPercent + '%';
+    
+    let stepLabel = 'Processing...';
+    let progressInfo = '';
+    
+    if (status.phase === 'preparing') {
+        stepLabel = 'Step 1: Preparing...';
+    } else if (status.phase === 'extracting') {
+        stepLabel = 'Step 1: Extracting...';
+        const mb = (v) => (v / (1024 * 1024)).toFixed(1);
+        progressInfo = ` (${mb(status.sub_progress)}MB / ${mb(status.sub_total)}MB)`;
+    } else if (status.phase === 'restoring') {
+        stepLabel = 'Step 2: Restoring...';
+    }
+    
+    subStatusText.textContent = stepLabel + progressInfo;
+    const subPercent = status.sub_total > 0 ? Math.round((status.sub_progress / status.sub_total) * 100) : 0;
+    subProgressBar.style.width = subPercent + '%';
+    subPercentText.textContent = subPercent + '%';
+    currentFileText.textContent = status.sub_current_file || status.current;
+  });
+
+  sse.addEventListener('done', () => {
+    console.log('[DEBUG] SSE DONE EVENT RECEIVED. Last phase:', lastPhase);
+    // VITAL: Do NOT automatically hide the UI or jump to 100% here anymore.
+    // The status event 'complete' phase should handle finality.
+    if (lastPhase === 'complete') {
+        progressBar.style.width = '100%';
+        percentText.textContent = '100%';
+        subProgressBar.style.width = '100%';
+        subPercentText.textContent = '100%';
+        statusText.textContent = 'Restore complete ✓';
+        subStatusText.textContent = 'Finished';
+        currentFileText.textContent = '';
+        btn.disabled = false;
+        btn.textContent = 'Restore Stack';
+        loadArchives();
+        setTimeout(() => { progressWrap.style.display = 'none'; }, 10000);
+    }
+    sse.close();
+  });
+
+  sse.onerror = () => sse.close();
+
   try {
     const res = await fetch('/api/restore', {
       method: 'POST',
@@ -634,17 +742,19 @@ async function runBatchRestore() {
       body: JSON.stringify({ archives: selected })
     });
     const data = await res.json();
-    if (res.ok) {
-        alert('Restore complete: ' + data.message);
-        loadArchives();
-    } else {
-        alert('Error: ' + data.error);
+    if (!res.ok) {
+        alert('Error: ' + (data.error || 'Unknown error'));
+        btn.disabled = false;
+        btn.textContent = 'Restore Stack';
+        progressWrap.style.display = 'none';
+        sse.close();
     }
   } catch (err) {
     alert('Restore failed: ' + err.message);
-  } finally {
     btn.disabled = false;
     btn.textContent = 'Restore Stack';
+    progressWrap.style.display = 'none';
+    sse.close();
   }
 }
 </script>

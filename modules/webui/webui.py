@@ -7,6 +7,13 @@ import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+import socketserver
+
+# Use ThreadingHTTPServer to handle multiple concurrent requests (e.g. SSE + Polling)
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    daemon_threads = True
+    # Optimization: avoid waiting for threads to finish on shutdown
+    block_on_close = False
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 BACKUP_SH  = os.path.join(SCRIPT_DIR, "..", "..", "backup.sh")
@@ -24,6 +31,21 @@ _config = {
 
 _lock = threading.Lock()
 _job  = {"running": False, "log": [], "exit_code": None, "started": None}
+
+_restore_lock = threading.Lock()
+_restore_job = {
+    "running": False, 
+    "restore_id": 0,
+    "progress": 0, 
+    "total": 0, 
+    "current": "", 
+    "phase": "idle",
+    "sub_progress": 0, 
+    "sub_total": 0,
+    "sub_current_file": "",
+    "results": [], 
+    "exit_code": None
+}
 
 
 def _run_backup(extra_args):
@@ -53,6 +75,133 @@ def _run_backup(extra_args):
     finally:
         with _lock:
             _job["running"] = False
+
+
+class ProgressWrapper:
+    def __init__(self, fileobj):
+        self.fileobj = fileobj
+        self.pos = 0
+        self.last_report = 0
+    def read(self, size=-1):
+        chunk = self.fileobj.read(size)
+        if chunk:
+            self.pos += len(chunk)
+            with _restore_lock:
+                _restore_job["sub_progress"] = self.pos
+            
+            # Debug: Report to UI log every 5MB
+            if self.pos - self.last_report > 5 * 1024 * 1024:
+                self.last_report = self.pos
+                with _lock:
+                    _job["log"].append(f"[DEBUG] Extraction Progress: {self.pos / (1024*1024):.1f}MB")
+        return chunk
+    def tell(self): return self.pos
+    def seek(self, offset, whence=0): return self.fileobj.seek(offset, whence)
+    def close(self): return self.fileobj.close()
+
+
+def _run_restore(selected, backup_dir, split_dir):
+    total = len(selected)
+    
+    with _lock:
+        _job["log"].append(f"[DEBUG] Starting batch restore of {total} archives")
+    
+    results = []
+    for i, filename in enumerate(selected):
+        path = os.path.join(split_dir, filename)
+        if not os.path.exists(path): 
+            results.append(f"Error: {filename} not found")
+            continue
+
+        compressed_size = os.path.getsize(path)
+        with _restore_lock:
+            _restore_job.update({
+                "current": filename, 
+                "progress": i, 
+                "phase": "extracting",
+                "sub_progress": 0, 
+                "sub_total": max(1, compressed_size),
+                "sub_current_file": "Opening archive..."
+            })
+        
+        with _lock:
+            _job["log"].append(f"[DEBUG] Extracting {filename} ({compressed_size / (1024*1024):.1f}MB)")
+            
+        try:
+            folder_name = filename.replace(".tar.gz", "")
+            target_folder = os.path.join(split_dir, folder_name)
+            os.makedirs(target_folder, exist_ok=True)
+            
+            with open(path, "rb") as f_raw:
+                f_wrapped = ProgressWrapper(f_raw)
+                with tarfile.open(fileobj=f_wrapped, mode="r:gz") as tar:
+                    def track_progress(members):
+                        for member in members:
+                            with _restore_lock:
+                                _restore_job["sub_current_file"] = member.name
+                                # f_wrapped.tell() will be updated during the actual read inside extractall
+                            yield member
+
+                    # Use the community-suggested generator approach
+                    tar.extractall(path=target_folder, members=track_progress(tar))
+            
+            with _lock:
+                _job["log"].append(f"[DEBUG] Extraction of {filename} complete")
+                
+            os.remove(path)
+            
+            # Find and run restore.sh
+            restore_script = None
+            if os.path.exists(os.path.join(target_folder, "restore.sh")):
+                restore_script = os.path.join(target_folder, "restore.sh")
+            else:
+                for root, dirs, files in os.walk(target_folder):
+                    if "restore.sh" in files:
+                        restore_script = os.path.join(root, "restore.sh")
+                        break
+            
+            if restore_script:
+                with _restore_lock:
+                    _restore_job.update({
+                        "phase": "restoring", 
+                        "sub_progress": 0, 
+                        "sub_total": 1,
+                        "sub_current_file": "Executing restore.sh..."
+                    })
+                
+                with _lock:
+                    _job["log"].append(f"[DEBUG] Running restore script: {restore_script}")
+                
+                os.chmod(restore_script, 0o755)
+                proc = subprocess.Popen(["bash", restore_script], 
+                                        cwd=os.path.dirname(restore_script),
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
+                                        text=True, bufsize=1)
+                for line in proc.stdout:
+                    l = line.rstrip("\n")
+                    # CRITICAL: Buffer FIRST, then print.
+                    with _lock: 
+                        _job["log"].append(l)
+                    print(f"[{folder_name}] {l}")
+                proc.wait()
+                with _restore_lock: 
+                    _restore_job["sub_progress"] = 1
+                results.append(f"Restored {folder_name}")
+            else:
+                results.append(f"Warning: No restore.sh for {folder_name}")
+        except Exception as e:
+            with _lock:
+                _job["log"].append(f"[DEBUG] Error restoring {filename}: {str(e)}")
+            results.append(f"Error restoring {filename}: {str(e)}")
+
+    with _restore_lock:
+        _restore_job.update({
+            "running": False, "progress": total, "current": "Done",
+            "phase": "complete", "results": results, "exit_code": 0
+        })
+    
+    with _lock:
+        _job["log"].append("[DEBUG] Batch restore process finished")
 
 
 def _ls_dir(path):
@@ -103,6 +252,7 @@ class Handler(BaseHTTPRequestHandler):
         if p in ("/","/index.html"): self._page()
         elif p == "/stream":         self._sse()
         elif p == "/status":         self._json_status()
+        elif p == "/api/restore-status": self._json_restore_status()
         elif p == "/config":         self._get_config()
         elif p == "/ls":             self._ls()
         elif p == "/archives":         self._list_archives()
@@ -123,7 +273,6 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_batch_restore(self):
         if not self._check_secret(): self.send_error(403); return
         
-        # Read JSON body
         length = int(self.headers.get("Content-Length", 0))
         data = json.loads(self.rfile.read(length).decode()) if length else {}
         selected = data.get("archives", [])
@@ -131,44 +280,28 @@ class Handler(BaseHTTPRequestHandler):
         backup_dir = _config["backup_dir"]
         split_dir = os.path.join(backup_dir, "split_stacks")
         
-        # If no specific archives selected, grab all .tar.gz files
         if not selected:
-            selected = [f for f in os.listdir(split_dir) if f.endswith(".tar.gz")]
-        
-        results = []
-        for filename in selected:
-            path = os.path.join(split_dir, filename)
-            if not os.path.exists(path): continue
-            
-            # Create target folder name (remove .tar.gz extension)
-            folder_name = filename.replace(".tar.gz", "")
-            target_folder = os.path.join(split_dir, folder_name)
-            os.makedirs(target_folder, exist_ok=True)
-            
-            # Extract
-            with tarfile.open(path, "r:gz") as tar:
-                tar.extractall(path=target_folder)
-            
-            # Remove original archive
-            os.remove(path)
-            
-            # Find and run restore.sh
-            # We look for restore.sh in the target folder or one level deep
-            restore_script = os.path.join(target_folder, "restore.sh")
-            if not os.path.exists(restore_script):
-                for root, dirs, files in os.walk(target_folder):
-                    if "restore.sh" in files:
-                        restore_script = os.path.join(root, "restore.sh")
-                        break
-            
-            if os.path.exists(restore_script):
-                os.chmod(restore_script, 0o755)
-                subprocess.run(["bash", restore_script], cwd=os.path.dirname(restore_script))
-                results.append(f"Restored {folder_name}")
+            if os.path.isdir(split_dir):
+                selected = [f for f in os.listdir(split_dir) if f.endswith(".tar.gz")]
             else:
-                results.append(f"Warning: No restore.sh for {folder_name}")
+                selected = []
 
-        self._json({"ok": True, "message": "; ".join(results)})
+        if not selected:
+            self._json({"ok": False, "error": "No archives to restore"}, 400)
+            return
+
+        with _restore_lock:
+            if _restore_job["running"]:
+                self._json({"ok": False, "error": "Restore already in progress"}, 409)
+                return
+            _restore_job.update({
+                "running": True, "restore_id": int(time.time()), "progress": 0, "total": len(selected), 
+                "current": "Preparing...", "phase": "starting", "sub_progress": 0, "sub_total": 0,
+                "sub_current_file": "", "results": [], "exit_code": None
+            })
+
+        threading.Thread(target=_run_restore, args=(selected, backup_dir, split_dir), daemon=True).start()
+        self._json({"ok": True, "message": "Restore started"})
 
     def _page(self):
         b = _page_content.encode()
@@ -187,6 +320,10 @@ class Handler(BaseHTTPRequestHandler):
     def _json_status(self):
         with _lock:
             self._json({k: _job[k] for k in ("running","exit_code","started")})
+
+    def _json_restore_status(self):
+        with _restore_lock:
+            self._json(_restore_job)
 
     def _get_config(self):
         with _config_lock:
@@ -222,7 +359,6 @@ class Handler(BaseHTTPRequestHandler):
         os.makedirs(split_dir, exist_ok=True)
         target_path = os.path.join(split_dir, filename)
         
-        # 1. Save the file
         try:
             with open(target_path, 'wb') as f:
                 bytes_read = 0
@@ -236,35 +372,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": f"Failed to save file: {str(e)}"}, 500)
             return
 
-        # 2. Inspect and Process
         try:
             is_bundle = False
             if tarfile.is_tarfile(target_path):
                 with tarfile.open(target_path, "r:gz") as tar:
                     members = tar.getmembers()
-                    # Check if there are multiple top-level directories (Download All)
                     top_levels = set()
                     for m in members:
-                        # Extract the top-level directory name
                         parts = m.name.split('/')
                         if parts and parts[0]:
                             top_levels.add(parts[0])
                     
                     if len(top_levels) > 1:
                         is_bundle = True
-                        # Extract to split_stacks
                         tar.extractall(path=split_dir)
                 
                 if is_bundle:
-                    # Remove the original archive after successful extraction
                     os.remove(target_path)
                     self._json({"ok": True, "message": f"Extracted bundle: {filename}"})
                 else:
                     self._json({"ok": True, "message": f"Saved individual archive: {filename}"})
             else:
-                # Not a tar, treat as regular file
                 self._json({"ok": True, "message": f"Saved file: {filename}"})
-                
         except Exception as e:
             self._json({"ok": False, "error": f"Processing failed: {str(e)}"}, 500)
 
@@ -278,34 +407,75 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_secret(): self.send_error(403); return
         qs = urlparse(self.path).query
         params = dict(p.split("=",1) for p in qs.split("&") if "=" in p)
-        raw = params.get("flags","")
-        extra = [f for f in raw.split() if f.startswith("--")] if raw else []
-        with _lock:
-            if _job["running"]: self.send_error(409,"Already running"); return
-        threading.Thread(target=_run_backup, args=(extra,), daemon=True).start()
+        mode = params.get("mode", "run")
+        
+        if mode == "run":
+            raw = params.get("flags","")
+            extra = [f for f in raw.split() if f.startswith("--")] if raw else []
+            with _lock:
+                if _job["running"] or _restore_job["running"]: 
+                    self.send_error(409,"Process already running"); return
+            threading.Thread(target=_run_backup, args=(extra,), daemon=True).start()
+        
         self.send_response(200)
         self.send_header("Content-Type","text/event-stream")
         self.send_header("Cache-Control","no-cache")
         self.send_header("X-Accel-Buffering","no")
         self.end_headers()
-        sent = 0
+        
+        sent_log = 0
+        last_status_json = ""
+        last_heartbeat = time.time()
+        
         try:
             while True:
+                now = time.time()
+                # 1. Send all new log lines
                 with _lock:
-                    new = _job["log"][sent:]
-                    running = _job["running"]
-                    code = _job["exit_code"]
-                for line in new:
+                    new_logs = _job["log"][sent_log:]
+                for line in new_logs:
                     self.wfile.write(f"event: line\ndata: {json.dumps(line)}\n\n".encode())
-                    sent += 1
+                    sent_log += 1
+                
+                # 2. Send status update
+                with _restore_lock:
+                    status = dict(_restore_job)
+                status_json = json.dumps(status)
+                if status_json != last_status_json:
+                    self.wfile.write(f"event: status\ndata: {status_json}\n\n".encode())
+                    last_status_json = status_json
+                
+                # 3. Heartbeat to keep connection alive
+                if now - last_heartbeat > 15:
+                    self.wfile.write(b": heartbeat\n\n")
+                    last_heartbeat = now
+
                 self.wfile.flush()
-                if not running and code is not None:
-                    self.wfile.write(f"event: done\ndata: {code}\n\n".encode())
+                
+                # 4. Check for completion
+                with _lock:
+                    with _restore_lock:
+                        still_running = _job["running"] or _restore_job["running"]
+                        has_more_logs = (len(_job["log"]) > sent_log)
+                
+                if not still_running and not has_more_logs:
+                    # Send final status one last time to be sure
+                    self.wfile.write(f"event: status\ndata: {status_json}\n\n".encode())
+                    self.wfile.write(f"event: done\ndata: 0\n\n".encode())
                     self.wfile.flush()
                     break
-                time.sleep(0.15)
+                time.sleep(0.3)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _static(self, name, mime):
+        path = os.path.join(SCRIPT_DIR, name)
+        if not os.path.exists(path): self.send_error(404); return
+        with open(path, "rb") as f: b = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", len(b))
+        self.end_headers(); self.wfile.write(b)
 
     def _start_run(self):
         if not self._check_secret(): self.send_error(403); return
@@ -319,25 +489,21 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=_run_backup, args=(extra,), daemon=True).start()
         self._json({"status":"started"}, 202)
 
-
     def _list_archives(self):
         with _config_lock:
             backup_dir = _config["backup_dir"]
         split_dir = os.path.join(backup_dir, "split_stacks")
         results = []
-        for root, dirs, files in os.walk(split_dir if os.path.isdir(split_dir) else backup_dir):
-            for fname in sorted(files):
-                if fname.endswith(".tar.gz"):
-                    fpath = os.path.join(root, fname)
-                    try:
-                        size = os.path.getsize(fpath)
-                        mtime = os.path.getmtime(fpath)
-                    except OSError:
-                        continue
-                    # relative path used as download key
+        base = split_dir if os.path.isdir(split_dir) else backup_dir
+        for fname in sorted(os.listdir(base)):
+            if fname.endswith(".tar.gz"):
+                fpath = os.path.join(base, fname)
+                try:
+                    size = os.path.getsize(fpath)
+                    mtime = os.path.getmtime(fpath)
                     rel = os.path.relpath(fpath, backup_dir)
                     results.append({"name": fname, "rel": rel, "size": size, "mtime": mtime})
-            break  # only top-level of split_stacks
+                except OSError: continue
         self._json({"archives": results, "backup_dir": backup_dir})
 
     def _download_file(self, rel_encoded):
@@ -345,18 +511,16 @@ class Handler(BaseHTTPRequestHandler):
         rel = unquote(rel_encoded)
         with _config_lock:
             backup_dir = _config["backup_dir"]
-        # Security: ensure path stays inside backup_dir
         split_dir = os.path.join(backup_dir, "split_stacks")
         full = os.path.realpath(os.path.join(split_dir, rel))
         if not full.startswith(os.path.realpath(backup_dir)):
-            self.send_error(403, "Forbidden"); return
+            self.send_error(403); return
         if not os.path.isfile(full):
-            self.send_error(404, "Not found"); return
-        fname = os.path.basename(full)
+            self.send_error(404); return
         size = os.path.getsize(full)
         self.send_response(200)
         self.send_header("Content-Type", "application/gzip")
-        self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+        self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(full)}"')
         self.send_header("Content-Length", str(size))
         self.end_headers()
         with open(full, "rb") as f:
@@ -371,66 +535,29 @@ class Handler(BaseHTTPRequestHandler):
             backup_dir = _config["backup_dir"]
         split_dir = os.path.join(backup_dir, "split_stacks")
         base = split_dir if os.path.isdir(split_dir) else backup_dir
-        archives = []
-        for fname in sorted(os.listdir(base)):
-            if fname.endswith(".tar.gz"):
-                archives.append(os.path.join(base, fname))
-        if not archives:
-            self.send_error(404, "No archives found"); return
-
-        ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-        bundle_name = f"backuper_all_{ts}.tar.gz"
-
+        archives = [os.path.join(base, f) for f in os.listdir(base) if f.endswith(".tar.gz")]
+        if not archives: self.send_error(404); return
+        ts = time.strftime("%Y%m%d_%H%M%S")
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for fpath in archives:
-                tar.add(fpath, arcname=os.path.basename(fpath))
+            for f in archives: tar.add(f, arcname=os.path.basename(f))
         data = buf.getvalue()
-
         self.send_response(200)
         self.send_header("Content-Type", "application/gzip")
-        self.send_header("Content-Disposition", f'attachment; filename="{bundle_name}"')
+        self.send_header("Content-Disposition", f'attachment; filename="backuper_all_{ts}.tar.gz"')
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        try:
-            self.wfile.write(data)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        self.wfile.write(data)
 
 if __name__ == "__main__":
     if not os.path.isfile(BACKUP_SH):
         print(f"WARNING: backup.sh not found at {BACKUP_SH}")
     else:
         print(f"backup.sh found: {BACKUP_SH}")
-    import socket
-    server = HTTPServer((HOST, PORT), Handler)
-    if HOST == "0.0.0.0":
-        ips = []
-        try:
-            for info in socket.getaddrinfo(socket.gethostname(), None):
-                ip = info[4][0]
-                if ":" not in ip and ip != "127.0.0.1":
-                    ips.append(ip)
-            ips = sorted(set(ips))
-        except Exception:
-            pass
-        # Also try the UDP trick to find the default-route IP
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            default_ip = s.getsockname()[0]
-            s.close()
-            if default_ip not in ips:
-                ips.insert(0, default_ip)
-        except Exception:
-            pass
-        all_ips = ips if ips else ["0.0.0.0"]
-        print("┌─ Backuper Web UI ──────────────────────────")
-        for ip in all_ips:
-            print(f"│  http://{ip}:{PORT}")
-        print("└────────────────────────────────────────────")
-    else:
-        print(f"Backuper Web UI  →  http://{HOST}:{PORT}")
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    print("┌─ Backuper Web UI ──────────────────────────")
+    print(f"│  http://{HOST}:{PORT}")
+    print("└────────────────────────────────────────────")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
