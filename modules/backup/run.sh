@@ -20,6 +20,8 @@ OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/split_stacks}"
 DRY_RUN=false  # Don't actually perform actions if true
 FORCE=false  # Overwrite existing backups if true
 MOUNT_MODE=prompt   # How to handle bind mounts: prompt | copy-all | reject-all
+ARCHIVE=false
+ARCHIVE_MODE=keep
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +31,11 @@ while [[ $# -gt 0 ]]; do
     --force)       FORCE=true ;;
     --copy-all)    MOUNT_MODE=copy-all ;;
     --reject-all)  MOUNT_MODE=reject-all ;;
+    --archive)     ARCHIVE=true ;;
+    --archive-replace)
+        ARCHIVE=true
+        ARCHIVE_MODE=replace
+        ;;
     *) die "Unknown flag: $1" ;;
   esac
   shift
@@ -72,7 +79,39 @@ for service_dir in "${SERVICE_DIRS[@]}"; do
   bash "$S/06-copy-bind-mounts.sh" "$service_dir" "$MOUNT_MODE"
 done
 
+# ╔══════════════════════════════════════════════════════════╗
+# ║  STEP 4 — Archive service directories (optional)         ║
+# ╚══════════════════════════════════════════════════════════╝
+if [[ "$ARCHIVE" != false ]]; then
+  bold "STEP 4 — Archiving service packages"
+  line
+
+  archived=0
+  skipped=0
+
+  while IFS= read -r -d '' service_dir; do
+    folder_name="$(basename "$service_dir")"
+
+    # Skip if an archive already exists for this folder and --force is not set
+    archive_path="$(dirname "$service_dir")/${folder_name}.tar.gz"
+    if [[ -f "$archive_path" && "$FORCE" != true ]]; then
+      warn "  Archive exists, skipping (use --force to overwrite): $archive_path"
+      (( skipped++ )) || true
+      continue
+    fi
+
+    bash "$S/09-archive-service.sh" "$service_dir" "$ARCHIVE_MODE"
+    (( archived++ )) || true
+
+  done < <(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+
+  line
+  ok "Archived $archived service package(s)."
+  [[ $skipped -gt 0 ]] && info "Skipped $skipped existing archive(s)."
+  line
+fi
+
 # ────────────────────────────────────────────────────────────────────────────
-# STEP 4 — Done
+# STEP 5 — Done
 # ────────────────────────────────────────────────────────────────────────────
 ok "Phase 1 complete — ${#SERVICE_DIRS[@]} service(s) backed up to $OUTPUT_DIR"

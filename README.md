@@ -63,6 +63,8 @@ sudo ./restore.sh
 | `./backup.sh --force` | Overwrite existing output folders |
 | `./backup.sh --stacks-dir <path>` | Override Dockge stacks directory |
 | `./backup.sh --output <path>` | Override backup output directory |
+| `./backup.sh --archive` | Pack each service dir into a `.tar.gz` (keeps source folder) |
+| `./backup.sh --archive-replace` | Pack each service dir into a `.tar.gz` and remove source folder |
 
 ---
 
