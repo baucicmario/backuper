@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../../lib/common.sh"
+source "$SCRIPT_DIR/../../../lib/common.sh"
 
 SERVICE_DIR="${1:?Usage: $0 <service_dir> <dockge_stacks_dir>}"
 DOCKGE_STACKS_DIR="${2:-/opt/stacks}"

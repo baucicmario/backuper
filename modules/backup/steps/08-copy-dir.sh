@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/../../lib/common.sh"
+source "$SCRIPT_DIR/../../../lib/common.sh"
 
 SRC="${1:?Usage: $0 <src> <dst>}"
 DST="${2:?}"
