@@ -2,7 +2,7 @@
 """
 webui.py — Minimal HTTP server for backuper.
 """
-import os, subprocess, threading, time, json, stat
+import os, subprocess, threading, time, json, stat, tarfile, io
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -230,6 +230,26 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
   .card{padding:1rem 1.25rem}
   #btn-backup{width:100%;justify-content:center}
 }
+
+/* ── Archives panel ─────────────────────────────────────────────── */
+#archives-section{display:none}
+#archives-section.visible{display:flex;flex-direction:column;gap:.5rem}
+.archives-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.75rem}
+.archive-count{font-size:.78125rem;color:var(--muted)}
+.archive-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr));gap:.625rem}
+.archive-card{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem 1rem;display:flex;align-items:center;gap:.75rem;transition:border-color .18s}
+.archive-card:hover{border-color:var(--primary)}
+.archive-icon{flex-shrink:0;color:var(--warn)}
+.archive-info{flex:1;min-width:0}
+.archive-name{font-family:var(--mono);font-size:.78125rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.archive-meta{font-size:.7rem;color:var(--muted);margin-top:.15rem}
+.btn-dl{flex-shrink:0;background:var(--surface-3);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:.35rem .7rem;font-size:.78125rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:.3rem;transition:border-color .18s,color .18s}
+.btn-dl:hover{border-color:var(--primary);color:var(--primary)}
+.btn-dl-all{background:var(--primary);color:#fff;border:none;border-radius:var(--radius);padding:.45rem 1rem;font-size:.8125rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:.4rem;transition:background .18s}
+.btn-dl-all:hover{background:var(--primary-h)}
+.btn-dl-all:disabled{opacity:.5;cursor:not-allowed}
+.archives-empty{text-align:center;padding:2rem;color:var(--faint);font-size:.875rem}
+
 </style>
 </head>
 <body>
@@ -279,7 +299,7 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
         <div class="path-field">
           <label class="path-label" for="input-backup-dir">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline;vertical-align:-.1em"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            Backup output dir
+            Backup dir
           </label>
           <div class="path-input-row">
             <input class="path-input" id="input-backup-dir" type="text" autocomplete="off" spellcheck="false" oninput="markDirty()">
@@ -319,6 +339,27 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
     </div>
     <pre id="log" role="log" aria-live="polite" aria-label="Backup output"></pre>
   </div>
+
+  <div id="archives-section">
+    <div class="archives-header">
+      <div>
+        <div class="card-title" style="margin-bottom:.25rem">Archives</div>
+        <div class="archive-count" id="archive-count">—</div>
+      </div>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <button class="btn btn-ghost" style="font-size:.8125rem" onclick="loadArchives()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          Refresh
+        </button>
+        <button id="btn-dl-all" class="btn-dl-all" onclick="downloadAll()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download All
+        </button>
+      </div>
+    </div>
+    <div id="archive-grid" class="archive-grid"></div>
+  </div>
+
 </main>
 
 <!-- ── File browser modal ───────────────────────────────────────────── -->
@@ -374,6 +415,7 @@ async function loadConfig(){
 }
 let _savedBackup='', _savedStacks='';
 loadConfig();
+loadArchives();
 
 // ── Dirty state ───────────────────────────────────────────────────────────────
 function markDirty(){
@@ -445,7 +487,7 @@ function runBackup(){
   const qs=flags.length?'?flags='+encodeURIComponent(flags.join(' ')):'';
   es=new EventSource('/stream'+qs);
   es.addEventListener('line',e=>appendLog(JSON.parse(e.data)));
-  es.addEventListener('done',e=>{
+  es.addEventListener('done',e=>{ loadArchives();
     const code=parseInt(e.data,10);es.close();es=null;btn.disabled=false;
     setStatus(code===0?'ok':'error',code===0?'Completed ✓':'Failed (exit '+code+')');
     appendLog('\n--- backup exited with code '+code+' ---');
@@ -530,6 +572,59 @@ function confirmBrowser(){
   markDirty();
   closeBrowser();
 }
+
+// ── Archives ───────────────────────────────────────────────────────────────
+const archiveIcon='<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+const dlIcon='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+
+function fmtSize(bytes){
+  if(bytes<1024) return bytes+'B';
+  if(bytes<1048576) return (bytes/1024).toFixed(1)+'KB';
+  if(bytes<1073741824) return (bytes/1048576).toFixed(1)+'MB';
+  return (bytes/1073741824).toFixed(2)+'GB';
+}
+function fmtDate(ts){return new Date(ts*1000).toLocaleString()}
+
+async function loadArchives(){
+  const section=document.getElementById('archives-section');
+  const grid=document.getElementById('archive-grid');
+  const count=document.getElementById('archive-count');
+  const btnAll=document.getElementById('btn-dl-all');
+  grid.innerHTML='<div class="archives-empty">Loading…</div>';
+  section.classList.add('visible');
+  try{
+    const res=await fetch('/archives');
+    const data=await res.json();
+    const list=data.archives||[];
+    count.textContent=list.length===0?'No archives found':list.length+' archive'+(list.length===1?'':'s')+' in '+data.backup_dir;
+    btnAll.disabled=(list.length===0);
+    if(list.length===0){grid.innerHTML='<div class="archives-empty">No .tar.gz files found in the backup directory.<br>Run a backup with --archive or --archive-replace first.</div>';return}
+    grid.innerHTML=list.map(a=>{
+      const encRel=encodeURIComponent(a.name);
+      return '<div class="archive-card">'
+        +'<div class="archive-icon">'+archiveIcon+'</div>'
+        +'<div class="archive-info">'
+          +'<div class="archive-name" title="'+a.name+'">'+a.name+'</div>'
+          +'<div class="archive-meta">'+fmtSize(a.size)+' &nbsp;·&nbsp; '+fmtDate(a.mtime)+'</div>'
+        +'</div>'
+        +'<a class="btn-dl" href="/download/'+encRel+'" download="'+a.name+'">'+dlIcon+' Download</a>'
+        +'</div>';
+    }).join('');
+  }catch(err){
+    grid.innerHTML='<div class="archives-empty">Error loading archives: '+err+'</div>';
+  }
+}
+
+function downloadAll(){
+  const btn=document.getElementById('btn-dl-all');
+  btn.disabled=true;btn.textContent='Preparing…';
+  const a=document.createElement('a');
+  a.href='/download-all';
+  a.download='backuper_all.tar.gz';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  setTimeout(()=>{btn.disabled=false;btn.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download All'},3000);
+}
+
 </script>
 </body>
 </html>
@@ -555,13 +650,16 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/status":         self._json_status()
         elif p == "/config":         self._get_config()
         elif p == "/ls":             self._ls()
+        elif p == "/archives":         self._list_archives()
+        elif p == "/download-all": self._download_all()
+        elif p.startswith("/download/"): self._download_file(p[len("/download/"):])
         else:                        self.send_error(404)
 
     def do_POST(self):
         p = urlparse(self.path).path
         if p == "/run":    self._start_run()
-        elif p == "/config": self._set_config()
-        else:                self.send_error(404)
+        elif p == "/config":      self._set_config()
+        else:                       self.send_error(404)
 
     def _page(self):
         b = PAGE.encode()
@@ -647,6 +745,83 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=_run_backup, args=(extra,), daemon=True).start()
         self._json({"status":"started"}, 202)
 
+
+    def _list_archives(self):
+        with _config_lock:
+            backup_dir = _config["backup_dir"]
+        split_dir = os.path.join(backup_dir, "split_stacks")
+        results = []
+        for root, dirs, files in os.walk(split_dir if os.path.isdir(split_dir) else backup_dir):
+            for fname in sorted(files):
+                if fname.endswith(".tar.gz"):
+                    fpath = os.path.join(root, fname)
+                    try:
+                        size = os.path.getsize(fpath)
+                        mtime = os.path.getmtime(fpath)
+                    except OSError:
+                        continue
+                    # relative path used as download key
+                    rel = os.path.relpath(fpath, backup_dir)
+                    results.append({"name": fname, "rel": rel, "size": size, "mtime": mtime})
+            break  # only top-level of split_stacks
+        self._json({"archives": results, "backup_dir": backup_dir})
+
+    def _download_file(self, rel_encoded):
+        from urllib.parse import unquote
+        rel = unquote(rel_encoded)
+        with _config_lock:
+            backup_dir = _config["backup_dir"]
+        # Security: ensure path stays inside backup_dir
+        split_dir = os.path.join(backup_dir, "split_stacks")
+        full = os.path.realpath(os.path.join(split_dir, rel))
+        if not full.startswith(os.path.realpath(backup_dir)):
+            self.send_error(403, "Forbidden"); return
+        if not os.path.isfile(full):
+            self.send_error(404, "Not found"); return
+        fname = os.path.basename(full)
+        size = os.path.getsize(full)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
+        self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        with open(full, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk: break
+                try: self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError): break
+
+    def _download_all(self):
+        with _config_lock:
+            backup_dir = _config["backup_dir"]
+        split_dir = os.path.join(backup_dir, "split_stacks")
+        base = split_dir if os.path.isdir(split_dir) else backup_dir
+        archives = []
+        for fname in sorted(os.listdir(base)):
+            if fname.endswith(".tar.gz"):
+                archives.append(os.path.join(base, fname))
+        if not archives:
+            self.send_error(404, "No archives found"); return
+
+        ts = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        bundle_name = f"backuper_all_{ts}.tar.gz"
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for fpath in archives:
+                tar.add(fpath, arcname=os.path.basename(fpath))
+        data = buf.getvalue()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
+        self.send_header("Content-Disposition", f'attachment; filename="{bundle_name}"')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 if __name__ == "__main__":
     if not os.path.isfile(BACKUP_SH):
