@@ -203,11 +203,19 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
     <div class="run-grid">
 
       <!-- top row: big button + flags -->
-            <div class="run-top">
-        <button id="btn-backup" class="btn btn-primary btn-lg" onclick="runBackup()">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-          Run Backup Now
-        </button>
+       <div class="run-top">
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button id="btn-backup" class="btn btn-primary btn-lg" onclick="runBackup()">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Run Backup Now
+          </button>
+          
+          <button id="btn-restore" class="btn btn-secondary btn-lg" onclick="document.getElementById('restore-upload').click()">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+            Upload Archive
+          </button>
+          <input type="file" id="restore-upload" style="display: none;" accept=".tar.gz,.zip" onchange="uploadArchive(event)">
+        </div>
         
         <div style="display: flex; flex-direction: column; gap: 0.625rem; flex: 1; min-width: 280px;">
           
@@ -563,6 +571,45 @@ function downloadAll(){
   a.download='backuper_all.tar.gz';
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   setTimeout(()=>{btn.disabled=false;btn.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download All'},3000);
+}
+
+// ── Upload Archive ──────────────────────────────────────────────────────────
+async function uploadArchive(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const btn = document.getElementById('btn-restore');
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Uploading...';
+  setStatus('running', 'Uploading...');
+
+  try {
+    const res = await fetch('/upload?filename=' + encodeURIComponent(file.name), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file
+    });
+    
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      setStatus('ok', 'Upload complete ✓');
+      appendLog('\n--- Uploaded: ' + file.name + ' ---');
+      loadArchives(); // Automatically refresh the archives grid
+    } else {
+      setStatus('error', 'Upload failed');
+      appendLog('\n--- Upload failed: ' + (data.error || 'Unknown error') + ' ---');
+      alert('Upload failed: ' + data.error);
+    }
+  } catch (err) {
+    setStatus('error', 'Connection lost');
+    appendLog('\n--- Upload failed: ' + err.message + ' ---');
+    alert('Upload failed: ' + err.message);
+  } finally {
+    event.target.value = ''; // Reset the input so the same file can be uploaded again
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+  }
 }
 
 </script>

@@ -114,6 +114,7 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path).path
         if p == "/run":    self._start_run()
         elif p == "/config":      self._set_config()
+        elif p == "/upload":      self._handle_upload()
         else:                       self.send_error(404)
 
 
@@ -150,6 +151,40 @@ class Handler(BaseHTTPRequestHandler):
             if "backup_dir" in data: _config["backup_dir"] = data["backup_dir"]
             if "stacks_dir" in data: _config["stacks_dir"] = data["stacks_dir"]
         self._json({"ok": True})
+    def _handle_upload(self):
+        if not self._check_secret(): self.send_error(403); return
+        qs = parse_qs(urlparse(self.path).query)
+        filename = qs.get("filename", ["uploaded_archive.tar.gz"])[0]
+        
+        # Security: sanitize filename
+        filename = os.path.basename(filename)
+        
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            self._json({"ok": False, "error": "Empty file received"}, 400)
+            return
+            
+        with _config_lock:
+            backup_dir = _config["backup_dir"]
+            
+        split_dir = os.path.join(backup_dir, "split_stacks")
+        # Ensure the target directory exists
+        os.makedirs(split_dir, exist_ok=True)
+        target_path = os.path.join(split_dir, filename)
+        
+        try:
+            with open(target_path, 'wb') as f:
+                # Read chunk by chunk to prevent RAM exhaustion on large files
+                bytes_read = 0
+                while bytes_read < length:
+                    chunk_size = min(65536, length - bytes_read)
+                    chunk = self.rfile.read(chunk_size)
+                    if not chunk: break
+                    f.write(chunk)
+                    bytes_read += len(chunk)
+            self._json({"ok": True, "message": f"Saved {filename}"})
+        except Exception as e:
+            self._json({"ok": False, "error": str(e)}, 500)
 
     def _ls(self):
         qs = parse_qs(urlparse(self.path).query)

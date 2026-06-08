@@ -242,3 +242,41 @@ function downloadAll(){
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   setTimeout(()=>{btn.disabled=false;btn.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download All'},3000);
 }
+// ── Upload Archive ──────────────────────────────────────────────────────────
+async function uploadArchive(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const btn = document.getElementById('btn-restore');
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Uploading...';
+  setStatus('running', 'Uploading...');
+
+  try {
+    const res = await fetch('/upload?filename=' + encodeURIComponent(file.name), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file
+    });
+    
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      setStatus('ok', 'Upload complete ✓');
+      appendLog('\n--- Uploaded: ' + file.name + ' ---');
+      loadArchives(); // Automatically refresh the archives grid
+    } else {
+      setStatus('error', 'Upload failed');
+      appendLog('\n--- Upload failed: ' + (data.error || 'Unknown error') + ' ---');
+      alert('Upload failed: ' + data.error);
+    }
+  } catch (err) {
+    setStatus('error', 'Connection lost');
+    appendLog('\n--- Upload failed: ' + err.message + ' ---');
+    alert('Upload failed: ' + err.message);
+  } finally {
+    event.target.value = ''; // Reset the input so the same file can be uploaded again
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+  }
+}
