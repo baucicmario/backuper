@@ -151,12 +151,12 @@ class Handler(BaseHTTPRequestHandler):
             if "backup_dir" in data: _config["backup_dir"] = data["backup_dir"]
             if "stacks_dir" in data: _config["stacks_dir"] = data["stacks_dir"]
         self._json({"ok": True})
+
+
     def _handle_upload(self):
         if not self._check_secret(): self.send_error(403); return
         qs = parse_qs(urlparse(self.path).query)
         filename = qs.get("filename", ["uploaded_archive.tar.gz"])[0]
-        
-        # Security: sanitize filename
         filename = os.path.basename(filename)
         
         length = int(self.headers.get("Content-Length", 0))
@@ -168,13 +168,12 @@ class Handler(BaseHTTPRequestHandler):
             backup_dir = _config["backup_dir"]
             
         split_dir = os.path.join(backup_dir, "split_stacks")
-        # Ensure the target directory exists
         os.makedirs(split_dir, exist_ok=True)
         target_path = os.path.join(split_dir, filename)
         
+        # 1. Save the file
         try:
             with open(target_path, 'wb') as f:
-                # Read chunk by chunk to prevent RAM exhaustion on large files
                 bytes_read = 0
                 while bytes_read < length:
                     chunk_size = min(65536, length - bytes_read)
@@ -182,9 +181,41 @@ class Handler(BaseHTTPRequestHandler):
                     if not chunk: break
                     f.write(chunk)
                     bytes_read += len(chunk)
-            self._json({"ok": True, "message": f"Saved {filename}"})
         except Exception as e:
-            self._json({"ok": False, "error": str(e)}, 500)
+            self._json({"ok": False, "error": f"Failed to save file: {str(e)}"}, 500)
+            return
+
+        # 2. Inspect and Process
+        try:
+            is_bundle = False
+            if tarfile.is_tarfile(target_path):
+                with tarfile.open(target_path, "r:gz") as tar:
+                    members = tar.getmembers()
+                    # Check if there are multiple top-level directories (Download All)
+                    top_levels = set()
+                    for m in members:
+                        # Extract the top-level directory name
+                        parts = m.name.split('/')
+                        if parts and parts[0]:
+                            top_levels.add(parts[0])
+                    
+                    if len(top_levels) > 1:
+                        is_bundle = True
+                        # Extract to split_stacks
+                        tar.extractall(path=split_dir)
+                
+                if is_bundle:
+                    # Remove the original archive after successful extraction
+                    os.remove(target_path)
+                    self._json({"ok": True, "message": f"Extracted bundle: {filename}"})
+                else:
+                    self._json({"ok": True, "message": f"Saved individual archive: {filename}"})
+            else:
+                # Not a tar, treat as regular file
+                self._json({"ok": True, "message": f"Saved file: {filename}"})
+                
+        except Exception as e:
+            self._json({"ok": False, "error": f"Processing failed: {str(e)}"}, 500)
 
     def _ls(self):
         qs = parse_qs(urlparse(self.path).query)
