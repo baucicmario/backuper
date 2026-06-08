@@ -3,6 +3,8 @@
 webui.py — Minimal HTTP server for backuper.
 """
 import os, subprocess, threading, time, json, stat, tarfile, io
+import threading
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -115,9 +117,58 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/run":    self._start_run()
         elif p == "/config":      self._set_config()
         elif p == "/upload":      self._handle_upload()
+        elif p == "/api/restore": self._handle_batch_restore()
         else:                       self.send_error(404)
 
+    def _handle_batch_restore(self):
+        if not self._check_secret(): self.send_error(403); return
+        
+        # Read JSON body
+        length = int(self.headers.get("Content-Length", 0))
+        data = json.loads(self.rfile.read(length).decode()) if length else {}
+        selected = data.get("archives", [])
+        
+        backup_dir = _config["backup_dir"]
+        split_dir = os.path.join(backup_dir, "split_stacks")
+        
+        # If no specific archives selected, grab all .tar.gz files
+        if not selected:
+            selected = [f for f in os.listdir(split_dir) if f.endswith(".tar.gz")]
+        
+        results = []
+        for filename in selected:
+            path = os.path.join(split_dir, filename)
+            if not os.path.exists(path): continue
+            
+            # Create target folder name (remove .tar.gz extension)
+            folder_name = filename.replace(".tar.gz", "")
+            target_folder = os.path.join(split_dir, folder_name)
+            os.makedirs(target_folder, exist_ok=True)
+            
+            # Extract
+            with tarfile.open(path, "r:gz") as tar:
+                tar.extractall(path=target_folder)
+            
+            # Remove original archive
+            os.remove(path)
+            
+            # Find and run restore.sh
+            # We look for restore.sh in the target folder or one level deep
+            restore_script = os.path.join(target_folder, "restore.sh")
+            if not os.path.exists(restore_script):
+                for root, dirs, files in os.walk(target_folder):
+                    if "restore.sh" in files:
+                        restore_script = os.path.join(root, "restore.sh")
+                        break
+            
+            if os.path.exists(restore_script):
+                os.chmod(restore_script, 0o755)
+                subprocess.run(["bash", restore_script], cwd=os.path.dirname(restore_script))
+                results.append(f"Restored {folder_name}")
+            else:
+                results.append(f"Warning: No restore.sh for {folder_name}")
 
+        self._json({"ok": True, "message": "; ".join(results)})
 
     def _page(self):
         b = _page_content.encode()
