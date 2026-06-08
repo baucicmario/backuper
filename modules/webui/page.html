@@ -217,25 +217,25 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
             Restore Stack
           </button>
-          <div id="restore-progress-wrap" style="display: none; width: 100%; margin-top: 1rem; background: var(--surface-2); padding: 0.75rem; border-radius: var(--radius); border: 1px solid var(--border);">
+          <div id="restore-progress-wrap" style="display: none; width: 100%; min-height: 124px; margin-top: 1rem; background: var(--surface-2); padding: 0.75rem; border-radius: var(--radius); border: 1px solid var(--border); box-sizing: border-box; overflow: hidden;">
             <!-- Overall Progress -->
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
-              <span id="restore-status-text" style="font-size: 0.75rem; font-weight: 600; color: var(--text);">Overall Progress</span>
-              <span id="restore-percent" style="font-size: 0.75rem; font-family: var(--mono); color: var(--primary); font-weight: 600;">0%</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; height: 1.2rem; overflow: hidden;">
+              <span id="restore-status-text" style="font-size: 0.75rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; margin-right: 1rem;">Overall Progress</span>
+              <span id="restore-percent" style="font-size: 0.75rem; font-family: var(--mono); color: var(--primary); font-weight: 600; flex-shrink: 0; width: 40px; text-align: right;">0%</span>
             </div>
             <div style="width: 100%; background: var(--surface-3); height: 6px; border-radius: 3px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 0.8rem;">
               <div id="restore-progress-bar" style="width: 0%; background: var(--primary); height: 100%; transition: width 0.3s ease;"></div>
             </div>
 
             <!-- Sub-task Progress -->
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
-              <span id="sub-status-text" style="font-size: 0.7rem; font-weight: 500; color: var(--muted);">Current Task</span>
-              <span id="sub-percent" style="font-size: 0.7rem; font-family: var(--mono); color: var(--warn); font-weight: 600;">0%</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; height: 1.1rem; overflow: hidden;">
+              <span id="sub-status-text" style="font-size: 0.7rem; font-weight: 500; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; margin-right: 1rem;">Current Task</span>
+              <span id="sub-percent" style="font-size: 0.7rem; font-family: var(--mono); color: var(--warn); font-weight: 600; flex-shrink: 0; width: 40px; text-align: right;">0%</span>
             </div>
             <div style="width: 100%; background: var(--surface-3); height: 6px; border-radius: 3px; overflow: hidden; border: 1px solid var(--border);">
               <div id="sub-progress-bar" style="width: 0%; background: var(--warn); height: 100%; transition: width 0.3s ease;"></div>
             </div>
-            <div id="restore-current-file" style="margin-top: 0.5rem; font-size: 0.65rem; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
+            <div id="restore-current-file" style="margin-top: 0.5rem; font-size: 0.65rem; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; height: 1rem; line-height: 1rem;"></div>
           </div>
           <input type="file" id="restore-upload" style="display: none;" accept=".tar.gz,.zip" onchange="uploadArchive(event)">
         </div>
@@ -328,7 +328,7 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
         </button>
       </div>
     </div>
-    <div id="archive-grid" class="archive-grid"><div class="archives-empty">Error loading archives: SyntaxError: Unexpected token '&lt;', "<!--?xml vers"... is not valid JSON</div--></div></div>
+    <div id="archive-grid" class="archive-grid"></div>
   </div>
 
 </main>
@@ -573,7 +573,7 @@ async function loadArchives(){
     grid.innerHTML=list.map(a=>{
       const encRel=encodeURIComponent(a.name);
       return '<div class="archive-card">'
-        + '<input type="checkbox" class="archive-select" value="'+a.name+'" style="margin-right: 10px;">'
+        + '<input type="checkbox" class="archive-select" value="'+a.name+'" style="margin-right: 10px;" checked>'
         +'<div class="archive-icon">'+archiveIcon+'</div>'
         +'<div class="archive-info">'
           +'<div class="archive-name" title="'+a.name+'">'+a.name+'</div>'
@@ -639,7 +639,12 @@ async function runBatchRestore() {
   const checkboxes = document.querySelectorAll('.archive-select:checked');
   const selected = Array.from(checkboxes).map(cb => cb.value);
   
-  if (!confirm(`Are you sure you want to restore ${selected.length > 0 ? selected.length : 'ALL'} archives?`)) return;
+  if (selected.length === 0) {
+    alert('Error: Please select at least one archive to restore.');
+    return;
+  }
+
+  if (!confirm(`Are you sure you want to restore ${selected.length} archives?`)) return;
 
   const btn = document.getElementById('btn-restore-action');
   const progressWrap = document.getElementById('restore-progress-wrap');
@@ -680,6 +685,7 @@ async function runBatchRestore() {
   };
 
   sse.addEventListener('log', e => appendLog(JSON.parse(e.data)));
+  sse.addEventListener('line', e => appendLog(JSON.parse(e.data)));
   
   sse.addEventListener('status', e => {
     const status = JSON.parse(e.data);
@@ -728,7 +734,6 @@ async function runBatchRestore() {
         btn.disabled = false;
         btn.textContent = 'Restore Stack';
         loadArchives();
-        setTimeout(() => { progressWrap.style.display = 'none'; }, 10000);
     }
     sse.close();
   });

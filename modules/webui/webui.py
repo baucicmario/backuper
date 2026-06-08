@@ -280,9 +280,10 @@ class Handler(BaseHTTPRequestHandler):
         backup_dir = _config["backup_dir"]
         split_dir = os.path.join(backup_dir, "split_stacks")
         
+        # Determine exactly what we are restoring BEFORE initializing state
         if not selected:
             if os.path.isdir(split_dir):
-                selected = [f for f in os.listdir(split_dir) if f.endswith(".tar.gz")]
+                selected = [f for f in sorted(os.listdir(split_dir)) if f.endswith(".tar.gz")]
             else:
                 selected = []
 
@@ -290,14 +291,27 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": "No archives to restore"}, 400)
             return
 
+        with _lock:
+            # CLEAR LOGS for new session
+            _job["log"] = []
+            
         with _restore_lock:
             if _restore_job["running"]:
                 self._json({"ok": False, "error": "Restore already in progress"}, 409)
                 return
+            # INITIALIZE STATE synchronously with the CORRECT total count
             _restore_job.update({
-                "running": True, "restore_id": int(time.time()), "progress": 0, "total": len(selected), 
-                "current": "Preparing...", "phase": "starting", "sub_progress": 0, "sub_total": 0,
-                "sub_current_file": "", "results": [], "exit_code": None
+                "running": True, 
+                "restore_id": int(time.time()), 
+                "progress": 0, 
+                "total": len(selected), 
+                "current": "Preparing...", 
+                "phase": "starting", 
+                "sub_progress": 0, 
+                "sub_total": 0,
+                "sub_current_file": "", 
+                "results": [], 
+                "exit_code": None
             })
 
         threading.Thread(target=_run_restore, args=(selected, backup_dir, split_dir), daemon=True).start()
@@ -434,7 +448,7 @@ class Handler(BaseHTTPRequestHandler):
                 with _lock:
                     new_logs = _job["log"][sent_log:]
                 for line in new_logs:
-                    self.wfile.write(f"event: line\ndata: {json.dumps(line)}\n\n".encode())
+                    self.wfile.write(f"event: log\ndata: {json.dumps(line)}\n\n".encode())
                     sent_log += 1
                 
                 # 2. Send status update
