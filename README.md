@@ -14,6 +14,9 @@ with self-contained restore scripts baked into every output folder.
    multi-service compose file into isolated service packages, copies bind-mounted
    host data, and generates a self-contained `restore.sh` inside every output folder.
 
+3. **Web UI** (`webui.py`) — A modern, responsive web interface for managing backups,
+   monitoring job status, and performing batch restorations.
+
 Each backup package contains:
 - `docker-compose.yml` — single-service compose
 - `.env` — only the variables this service uses
@@ -27,12 +30,14 @@ Each backup package contains:
 
 - Linux (Debian/Ubuntu recommended; also supports Fedora, Arch, Alpine)
 - Bash 4.2+
+- Python 3.7+ (for Web UI)
 - `yq` v4, `jq`, `docker` with Compose plugin (installed by `setup.sh`)
 
 ---
 
 ## Quick start
 
+### CLI Usage
 ```bash
 # 1. Clone
 git clone https://github.com/yourname/backuper.git
@@ -41,15 +46,21 @@ cd backuper
 # 2. (First time) Install dependencies
 ./setup.sh
 
-# 3. Run a frontend
-python3 modules/webui/webui.py
-
-# 3. run in CLI
+# 3. Run backup
 ./backup.sh
 
 # 4. Restore a service
 cd backups/split_stacks/players__jellyfin
 sudo ./restore.sh
+```
+
+### Web UI Usage
+```bash
+# 1. Start the Web UI
+python3 modules/webui/webui.py
+
+# 2. Access in browser
+# http://localhost:8099
 ```
 
 ---
@@ -93,7 +104,12 @@ backuper/
 ├── lib/                  ← shared library (common.sh, runner.sh)
 ├── modules/
 │   ├── setup/            ← dependency installation scripts
-│   └── backup/           ← backup engine (run.sh + steps/ + data/)
+│   ├── backup/           ← backup engine (run.sh + steps/ + data/)
+│   └── webui/            ← web management interface
+│       ├── webui.py      ← entrypoint
+│       ├── backend/      ← modular python package (server, tasks, state)
+│       ├── static/       ← frontend assets (css, js)
+│       └── templates/    ← html templates
 ├── docs/                 ← documentation
 ├── tests/                ← test scripts
 └── deprecated/           ← archived modules (do not use)
