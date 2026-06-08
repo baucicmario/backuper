@@ -41,7 +41,10 @@ cd backuper
 # 2. (First time) Install dependencies
 ./setup.sh
 
-# 3. Run a backup
+# 3. Run a frontend
+python3 modules/webui/webui.py
+
+# 3. run in CLI
 ./backup.sh
 
 # 4. Restore a service
