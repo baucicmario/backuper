@@ -27,8 +27,6 @@ source "$STATE_FILE"
 : "${IMMICH_ENV_FILE:?Missing IMMICH_ENV_FILE in state file}"
 : "${POSTGRES_SERVICE:?Missing POSTGRES_SERVICE in state file}"
 
-BACKUP_ROOT="${BACKUP_ROOT:?BACKUP_ROOT must be set by the orchestrator}"
-RUN_ID="${RUN_ID:?RUN_ID must be set by the orchestrator}"
 BACKUP_DIR="$CENTRAL_BACKUP_DIR/split_stacks/immich__${POSTGRES_SERVICE}"
 [[ -d "$BACKUP_DIR" ]] || die "Phase 1 output not found: $BACKUP_DIR — run phase1.sh first"
 

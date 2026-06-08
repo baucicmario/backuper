@@ -25,7 +25,7 @@ source "$STATE_FILE"
 : "${IMMICH_SERVICE:?}"
 : "${POSTGRES_SERVICE:?}"
 
-RUN_ID="${RUN_ID:?RUN_ID must be set by the orchestrator}"
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"   # ← soft default, not a hard require
 
 manifest="$BACKUP_DIR/manifest.env"
 
