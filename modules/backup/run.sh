@@ -20,8 +20,8 @@ OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/split_stacks}"
 DRY_RUN=false  # Don't actually perform actions if true
 FORCE=false  # Overwrite existing backups if true
 MOUNT_MODE=prompt   # How to handle bind mounts: prompt | copy-all | reject-all
-ARCHIVE=false
-ARCHIVE_MODE=keep
+ARCHIVE=true
+ARCHIVE_MODE=replace
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
