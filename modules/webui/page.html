@@ -203,16 +203,34 @@ main{flex:1;display:flex;flex-direction:column;padding:1.75rem 1.5rem;gap:1.25re
     <div class="run-grid">
 
       <!-- top row: big button + flags -->
-      <div class="run-top">
+            <div class="run-top">
         <button id="btn-backup" class="btn btn-primary btn-lg" onclick="runBackup()">
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
           Run Backup Now
         </button>
-        <div class="flags">
-          <button class="flag-toggle" data-flag="--copy-all" onclick="toggleFlag(this)" title="Copy all bind mounts without prompting">copy-all-mounts</button>
-          <button class="flag-toggle" data-flag="--reject-all" onclick="toggleFlag(this)" title="Skip all bind mounts (config only)">config-mounts-only</button>
-          <button class="flag-toggle" data-flag="--force" onclick="toggleFlag(this)" title="Overwrite existing output folders">overwrite-existing-folders</button>
-          <button class="flag-toggle" data-flag="--archive" onclick="toggleFlag(this)" title="Pack each service dir into .tar.gz">archive-with folders</button>
+        
+        <div style="display: flex; flex-direction: column; gap: 0.625rem; flex: 1; min-width: 280px;">
+          
+          <p style="font-size:.75rem;color:var(--muted);margin-top:.15rem;font-weight:500;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-.15em;margin-right:.1rem"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            Prompt for larger mounts is on by default
+          </p>
+          <div class="flags">
+            <button class="flag-toggle" data-flag="--copy-all" onclick="toggleFlag(this)" title="Copy all bind mounts without prompting">copy-all-mounts</button>
+            <button class="flag-toggle" data-flag="--reject-all" onclick="toggleFlag(this)" title="Skip all bind mounts (config only)">config-mounts-only</button>
+          </div>
+          
+          <hr style="border: 0; height: 1px; background: var(--border); margin: 0;">
+          
+          <p style="font-size:.75rem;color:var(--muted);margin-top:.15rem;font-weight:500;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-.15em;margin-right:.1rem"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            by default, the backup will produce just archives.
+          </p>
+          <div class="flags">
+            <button class="flag-toggle" data-flag="--force" onclick="toggleFlag(this)" title="Overwrite existing output folders">overwrite-existing-backups</button>
+            <button class="flag-toggle" data-flag="--archive" onclick="toggleFlag(this)" title="Pack each service dir into .tar.gz">include folders</button>
+          </div>
+
         </div>
       </div>
 
