@@ -23,4 +23,7 @@ bash "$T/03-write-manifest.sh"
 # STEP 4 — Consolidate Immich backup
 bash "$T/04-consolidate.sh"
 
+# STEP 5 — Generate master restore script
+bash "$T/05-write-restore.sh"
+
 ok "🎉 Phase 2 complete."
