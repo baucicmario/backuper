@@ -828,8 +828,35 @@ if __name__ == "__main__":
         print(f"WARNING: backup.sh not found at {BACKUP_SH}")
     else:
         print(f"backup.sh found: {BACKUP_SH}")
+    import socket
     server = HTTPServer((HOST, PORT), Handler)
-    print(f"Backuper Web UI  →  http://{HOST}:{PORT}")
+    if HOST == "0.0.0.0":
+        ips = []
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None):
+                ip = info[4][0]
+                if ":" not in ip and ip != "127.0.0.1":
+                    ips.append(ip)
+            ips = sorted(set(ips))
+        except Exception:
+            pass
+        # Also try the UDP trick to find the default-route IP
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            default_ip = s.getsockname()[0]
+            s.close()
+            if default_ip not in ips:
+                ips.insert(0, default_ip)
+        except Exception:
+            pass
+        all_ips = ips if ips else ["0.0.0.0"]
+        print("┌─ Backuper Web UI ──────────────────────────")
+        for ip in all_ips:
+            print(f"│  http://{ip}:{PORT}")
+        print("└────────────────────────────────────────────")
+    else:
+        print(f"Backuper Web UI  →  http://{HOST}:{PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
