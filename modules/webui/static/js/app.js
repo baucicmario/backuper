@@ -326,21 +326,77 @@ async function loadArchives() {
     }
 }
 
-function downloadAll() {
+async function downloadAll() {
     const btn = document.getElementById('btn-dl-all');
     if (!btn) return;
+    
     btn.disabled = true;
     btn.textContent = 'Preparing…';
-    const a = document.createElement('a');
-    a.href = '/download-all';
-    a.download = 'backuper_all.tar.gz';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => {
+    
+    try {
+        const res = await fetch('/download-all', { signal: AbortSignal.timeout(600000) }); // 10 min timeout
+        
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        
+        btn.textContent = 'Downloading…';
+        
+        // Get filename from Content-Disposition header if available
+        const contentDisposition = res.headers.get('content-disposition');
+        let filename = 'backuper_all.tar.gz';
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename="([^"]+)"/);
+            if (match) filename = match[1];
+        }
+        
+        // Read the response body with progress tracking if content-length is available
+        const contentLength = res.headers.get('content-length');
+        let receivedBytes = 0;
+        const chunks = [];
+        
+        const reader = res.body.getReader();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            receivedBytes += value.length;
+            
+            // Show progress if we know the total size
+            if (contentLength) {
+                const percent = Math.round((receivedBytes / contentLength) * 100);
+                btn.textContent = `Downloading… ${percent}%`;
+            }
+        }
+        
+        // Combine chunks into a single blob
+        const blob = new Blob(chunks, { type: 'application/gzip' });
+        
+        // Trigger download
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
         btn.disabled = false;
         btn.innerHTML = dlIcon + ' Download All';
-    }, 3000);
+    } catch (err) {
+        console.error('Download failed:', err);
+        btn.disabled = false;
+        btn.innerHTML = dlIcon + ' Download All';
+        btn.style.background = 'var(--error)';
+        btn.style.color = 'white';
+        setTimeout(() => {
+            btn.style.background = '';
+            btn.style.color = '';
+        }, 3000);
+        alert('Download failed: ' + (err.message || 'Unknown error'));
+    }
 }
 
 // ── Upload Archive ──────────────────────────────────────────────────────────

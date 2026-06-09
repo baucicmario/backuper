@@ -415,7 +415,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _download_all(self):
         """
-        Bundles all archives into a single archive for download.
+        Streams all archives as a single tar.gz for download.
+        Uses streaming to avoid buffering large files in memory.
         """
         with state.config_lock:
             backup_dir = state.config["backup_dir"]
@@ -426,24 +427,29 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, "No archives found")
             return
             
-        archives = [os.path.join(base, f) for f in os.listdir(base) if f.endswith(".tar.gz")]
+        archives = sorted([os.path.join(base, f) for f in os.listdir(base) if f.endswith(".tar.gz")])
         if not archives:
             self.send_error(404)
             return
-            
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for f in archives:
-                tar.add(f, arcname=os.path.basename(f))
         
-        data = buf.getvalue()
+        # Calculate total size for Content-Length header
+        total_size = sum(os.path.getsize(f) for f in archives)
+        
+        ts = time.strftime("%Y%m%d_%H%M%S")
         self.send_response(200)
         self.send_header("Content-Type", "application/gzip")
         self.send_header("Content-Disposition", f'attachment; filename="backuper_all_{ts}.tar.gz"')
-        self.send_header("Content-Length", str(len(data)))
+        # Note: Content-Length is approximate since tar.gz adds some overhead
+        self.send_header("Content-Length", str(int(total_size * 1.02)))
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
-        self.wfile.write(data)
+        
+        try:
+            with tarfile.open(fileobj=self.wfile, mode="w|gz") as tar:
+                for f in archives:
+                    tar.add(f, arcname=os.path.basename(f))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
 def start_server():
