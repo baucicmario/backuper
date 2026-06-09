@@ -152,11 +152,89 @@ function clearLog() {
 
 // ── Backup Execution (SSE) ─────────────────────────────────────────────────
 let es = null;
+let _discoveredStacks = [];
 
-function runBackup() {
+async function runBackup() {
+    const btn = document.getElementById('btn-backup');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'Discovering...';
+    
+    try {
+        const res = await fetch('/api/discover-containers');
+        const data = await res.json();
+        
+        if (!data.ok) {
+            alert('Failed to discover containers: ' + data.error);
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            return;
+        }
+        
+        _discoveredStacks = data.containers || [];
+        
+        if (_discoveredStacks.length === 0) {
+            alert('No backupable containers found.');
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            return;
+        }
+        
+        // Populate modal
+        const list = document.getElementById('selection-list');
+        if (list) {
+            list.innerHTML = _discoveredStacks.map((s, i) => `
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; padding: 0.25rem 0.5rem; background: var(--surface-2); border-radius: var(--radius); border: 1px solid var(--border);">
+                    <input type="checkbox" class="stack-select" value="${s.path}" checked>
+                    <span style="font-family: var(--mono); font-size: 0.85rem; color: var(--text);">${s.name}</span>
+                </label>
+            `).join('');
+        }
+        
+        const bd = document.getElementById('selection-backdrop');
+        if (bd) {
+            bd.style.display = 'flex';
+            setTimeout(() => bd.classList.add('open'), 10);
+        }
+    } catch (err) {
+        alert('Failed to discover containers: ' + err.message);
+    }
+    
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+}
+
+function closeSelectionModal() {
+    const bd = document.getElementById('selection-backdrop');
+    if (bd) {
+        bd.classList.remove('open');
+        setTimeout(() => bd.style.display = 'none', 300);
+    }
+}
+
+function toggleAllSelection(check) {
+    document.querySelectorAll('.stack-select').forEach(cb => cb.checked = check);
+}
+
+function confirmSelection() {
+    const selected = Array.from(document.querySelectorAll('.stack-select:checked')).map(cb => cb.value);
+    
+    if (selected.length === 0) {
+        alert('Please select at least one container.');
+        return;
+    }
+    
+    closeSelectionModal();
+    executeBackup(selected);
+}
+
+function executeBackup(stacks) {
     if (es) { es.close(); es = null; }
     clearLog();
     const flags = getFlags();
+    if (stacks && stacks.length > 0) {
+        flags.push('--containers', ...stacks);
+    }
     const btn = document.getElementById('btn-backup');
     if (btn) btn.disabled = true;
     setStatus('running', 'Running…');

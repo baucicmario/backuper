@@ -220,6 +220,33 @@
     </div>
 </div>
 
+<!-- ── Selection modal ───────────────────────────────────────────── -->
+<div class="backdrop" id="selection-backdrop" role="dialog" aria-modal="true" style="z-index: 1000; display: none;">
+    <div class="modal">
+        <div class="modal-head">
+            <span class="modal-head-title">Select Containers to Backup</span>
+            <button class="modal-close" onclick="closeSelectionModal()" aria-label="Close">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <div class="modal-body" style="padding: 1rem; max-height: 60vh; overflow-y: auto;">
+            <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem;">
+                <button class="btn btn-ghost" style="font-size: 0.8rem; padding: 0.25rem 0.5rem;" onclick="toggleAllSelection(true)">Select All</button>
+                <button class="btn btn-ghost" style="font-size: 0.8rem; padding: 0.25rem 0.5rem;" onclick="toggleAllSelection(false)">Deselect All</button>
+            </div>
+            <div id="selection-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <!-- Checkboxes will be injected here -->
+            </div>
+        </div>
+        <div class="modal-foot">
+            <div class="modal-actions" style="width: 100%; justify-content: flex-end;">
+                <button class="btn btn-ghost" onclick="closeSelectionModal()" style="margin-right: 0.5rem;">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmSelection()">Confirm Backup</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="/static/js/app.js"></script>
 </body>
 </html>

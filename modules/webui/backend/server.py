@@ -72,6 +72,8 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/restore-status":
             with state.restore_lock:
                 self._send_json(state.restore_job)
+        elif p == "/api/discover-containers":
+            self._discover_containers()
         elif p == "/config":
             with state.config_lock:
                 self._send_json(dict(state.config))
@@ -166,12 +168,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         
         qs = urlparse(self.path).query
-        params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
-        mode = params.get("mode", "run")
+        params = parse_qs(qs)
+        mode = params.get("mode", ["run"])[0]
         
         if mode == "run":
-            raw = params.get("flags", "")
-            extra = [f for f in raw.split() if f.startswith("--")] if raw else []
+            raw = params.get("flags", [""])[0]
+            extra = raw.split() if raw else []
             with state.job_lock:
                 with state.restore_lock:
                     if state.job["running"] or state.restore_job["running"]:
@@ -259,6 +261,39 @@ class Handler(BaseHTTPRequestHandler):
             state.job["running"] = True
         threading.Thread(target=tasks.run_backup, args=(extra,), daemon=True).start()
         self._send_json({"status": "started"}, 202)
+
+    def _discover_containers(self):
+        """
+        Discovers all available backupable containers (services within stacks).
+        """
+        if not self._check_secret(): self.send_error(403); return
+        with state.config_lock:
+            stacks_dir = state.config.get("stacks_dir", "/opt/stacks")
+            
+        import subprocess
+        script_discover = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "backup", "steps", "01-discover-stacks.sh"))
+        script_extract = os.path.normpath(os.path.join(SCRIPT_DIR, "..", "..", "backup", "steps", "02-extract-services.sh"))
+        
+        try:
+            output = subprocess.check_output(["bash", script_discover, stacks_dir], text=True, stderr=subprocess.STDOUT)
+            stacks = [line.strip() for line in output.split("\n") if line.strip()]
+            
+            results = []
+            for stack_path in stacks:
+                compose_file = os.path.join(stack_path, "compose.yaml")
+                if os.path.isfile(compose_file):
+                    srv_out = subprocess.check_output(["bash", script_extract, compose_file], text=True, stderr=subprocess.STDOUT)
+                    services = [line.strip() for line in srv_out.split("\n") if line.strip()]
+                    stack_name = os.path.basename(stack_path)
+                    for srv in services:
+                        results.append({
+                            "path": f"{stack_path}:{srv}",
+                            "name": f"{stack_name} / {srv}"
+                        })
+            
+            self._send_json({"ok": True, "containers": results})
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)}, 500)
 
     def _set_config(self):
         """

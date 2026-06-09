@@ -22,6 +22,8 @@ FORCE=false  # Overwrite existing backups if true
 MOUNT_MODE=prompt   # How to handle bind mounts: prompt | copy-all | reject-all
 ARCHIVE=true
 ARCHIVE_MODE=replace
+SELECT_ALL=false
+EXPLICIT_CONTAINERS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,6 +38,15 @@ while [[ $# -gt 0 ]]; do
         ARCHIVE=true
         ARCHIVE_MODE=replace
         ;;
+    --select-all) SELECT_ALL=true ;;
+    --containers)
+        shift
+        while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
+          EXPLICIT_CONTAINERS+=("$1")
+          shift
+        done
+        continue
+        ;;
     *) die "Unknown flag: $1" ;;
   esac
   shift
@@ -46,10 +57,51 @@ mkdir -p "$OUTPUT_DIR"
 SERVICE_DIRS=()  # Track all extracted service directories
 
 # ────────────────────────────────────────────────────────────────────────────
-# STEP 1 — Discover all Dockge stacks
+# STEP 1 — Discover and Select Dockge containers
 # ────────────────────────────────────────────────────────────────────────────
 echo "[job-phase: discover]"
-mapfile -t STACK_DIRS < <(bash "$S/01-discover-stacks.sh" "$DOCKGE_STACKS_DIR")
+
+if [[ ${#EXPLICIT_CONTAINERS[@]} -gt 0 ]]; then
+  SELECTED_CONTAINERS=("${EXPLICIT_CONTAINERS[@]}")
+else
+  mapfile -t ALL_STACKS < <(bash "$S/01-discover-stacks.sh" "$DOCKGE_STACKS_DIR")
+  ALL_CONTAINERS=()
+  for stack in "${ALL_STACKS[@]}"; do
+    if [[ -f "$stack/compose.yaml" ]]; then
+      mapfile -t srvs < <(bash "$S/02-extract-services.sh" "$stack/compose.yaml")
+      for s in "${srvs[@]}"; do
+        ALL_CONTAINERS+=("$stack:$s")
+      done
+    fi
+  done
+  
+  if [[ "$SELECT_ALL" == true ]]; then
+    SELECTED_CONTAINERS=("${ALL_CONTAINERS[@]}")
+  elif [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
+    # If in non-interactive mode without --select-all and no --containers, default to all
+    SELECTED_CONTAINERS=("${ALL_CONTAINERS[@]}")
+  else
+    # Launch interactive selector
+    mapfile -t SELECTED_CONTAINERS < <(bash "$S/01b-select-containers.sh" "${ALL_CONTAINERS[@]}")
+  fi
+fi
+
+if [[ ${#SELECTED_CONTAINERS[@]} -eq 0 ]]; then
+  warn "No containers selected for backup."
+  echo "[job-phase: complete]"
+  exit 0
+fi
+
+# Reconstruct STACK_DIRS from SELECTED_CONTAINERS for the extraction loop
+STACK_DIRS=()
+for container in "${SELECTED_CONTAINERS[@]}"; do
+  stack_path="${container%%:*}"
+  local_found=false
+  for sd in "${STACK_DIRS[@]}"; do
+    [[ "$sd" == "$stack_path" ]] && local_found=true && break
+  done
+  [[ "$local_found" == false ]] && STACK_DIRS+=("$stack_path")
+done
 
 # ────────────────────────────────────────────────────────────────────────────
 # STEP 2 — Extract services from each stack
@@ -61,7 +113,23 @@ for stack_dir in "${STACK_DIRS[@]}"; do
   compose_file="$stack_dir/compose.yaml"
   env_file="$stack_dir/.env"
 
-  mapfile -t SERVICES < <(bash "$S/02-extract-services.sh" "$compose_file")
+  mapfile -t ALL_SERVICES < <(bash "$S/02-extract-services.sh" "$compose_file")
+  SERVICES=()
+  for service in "${ALL_SERVICES[@]}"; do
+    local_found=false
+    for container in "${SELECTED_CONTAINERS[@]}"; do
+      if [[ "$container" == "$stack_dir:$service" || "$container" == "$(basename "$stack_dir"):$service" ]]; then
+        local_found=true
+        break
+      fi
+    done
+    [[ "$local_found" == true ]] && SERVICES+=("$service")
+  done
+
+  if [[ ${#SERVICES[@]} -eq 0 ]]; then
+    continue
+  fi
+
   echo "[job-progress: $extract_idx]"
   echo "[job-current: $(basename "$stack_dir")]"
   (( extract_idx++ )) || true
