@@ -49,9 +49,15 @@ cd backuper
 # 3. Run backup
 ./backup.sh
 
-# 4. Restore a service
+# 4a. Restore a single service manually
 cd backups/split_stacks/players__jellyfin
 sudo ./restore.sh
+
+# 4b. Headless batch restore (interactive archive selection)
+sudo ./restore.sh ./backups/split_stacks/
+
+# 4c. Restore from a bundle archive
+sudo ./restore.sh /mnt/usb/backuper_all.tar.gz
 ```
 
 ### Web UI Usage
@@ -79,6 +85,11 @@ python3 modules/webui/webui.py
 | `./backup.sh --output <path>` | Override backup output directory |
 | `./backup.sh --archive` | Pack each service dir into a `.tar.gz` (keeps source folder) |
 | `./backup.sh --archive-replace` | Pack each service dir into a `.tar.gz` and remove source folder |
+| `./restore.sh <path>` | Headless batch restore (archive, bundle, or directory) |
+| `./restore.sh <path> --select-all` | Restore all archives without interactive selection |
+| `./restore.sh <path> --archives <f1> <f2>` | Restore only specific archives |
+| `./restore.sh <path> --work-dir <dir>` | Override the restore work directory |
+| `./restore.sh <path> --dry-run` | Show what would happen, execute nothing |
 
 ---
 
@@ -100,16 +111,21 @@ See `.env.example` for all supported variables.
 backuper/
 ├── setup.sh              ← entrypoint: provision host
 ├── backup.sh             ← entrypoint: run backup
-├── bin/                  ← canonical commands (setup, backup)
+├── restore.sh            ← entrypoint: headless batch restore
+├── bin/                  ← canonical commands (setup, backup, restore)
 ├── lib/                  ← shared library (common.sh, runner.sh)
 ├── modules/
 │   ├── setup/            ← dependency installation scripts
 │   ├── backup/           ← backup engine (run.sh + steps/ + data/)
+│   ├── restore/          ← headless restore engine (run.sh + steps/)
+│   │   ├── run.sh        ← orchestrator
+│   │   └── steps/        ← composable step scripts (01-06)
 │   └── webui/            ← web management interface
 │       ├── webui.py      ← entrypoint
 │       ├── backend/      ← modular python package (server, tasks, state)
 │       ├── static/       ← frontend assets (css, js)
 │       └── templates/    ← html templates
+├── agents/               ← agent role documentation
 ├── docs/                 ← documentation
 ├── tests/                ← test scripts
 └── deprecated/           ← archived modules (do not use)

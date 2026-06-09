@@ -135,3 +135,123 @@ sanitize_dirname() {
   local raw="$1"
   printf '%s' "$raw" | tr '/' '_' | sed 's/[^A-Za-z0-9._-]/_/g'
 }
+
+# ── Human-readable file size ─────────────────────────────────────────────────
+# Usage: fmt_size <bytes>
+fmt_size() {
+  local bytes="$1"
+  if   (( bytes < 1024 ));        then printf '%dB'    "$bytes"
+  elif (( bytes < 1048576 ));     then printf '%.1fKB' "$(echo "$bytes / 1024" | bc -l)"
+  elif (( bytes < 1073741824 ));  then printf '%.1fMB' "$(echo "$bytes / 1048576" | bc -l)"
+  else                                 printf '%.2fGB' "$(echo "$bytes / 1073741824" | bc -l)"
+  fi
+}
+
+# ── Yes/No confirmation prompt ───────────────────────────────────────────────
+# Usage: confirm_prompt "Do you want to continue?"  →  returns 0 (yes) or 1 (no)
+confirm_prompt() {
+  local prompt="${1:-Continue?}"
+  local answer
+  printf '%s [y/N] ' "$prompt"
+  read -r answer </dev/tty
+  [[ "${answer,,}" == "y" || "${answer,,}" == "yes" ]]
+}
+
+# ── Extract tar.gz with progress bar ─────────────────────────────────────────
+# Uses pv for visual progress when available, falls back to plain tar.
+# Usage: extract_with_progress <archive_path> <destination_dir> [label]
+extract_with_progress() {
+  local archive="$1"
+  local dest="$2"
+  local label="${3:-$(basename "$archive")}"
+  local size
+
+  size="$(stat -c%s "$archive" 2>/dev/null || stat -f%z "$archive" 2>/dev/null || echo 0)"
+  mkdir -p "$dest"
+
+  info "  Extracting: $label  ($(fmt_size "$size"))"
+
+  if command -v pv >/dev/null 2>&1; then
+    pv -N "$label" -s "$size" "$archive" | tar -xzf - -C "$dest"
+  else
+    warn "  (pv not available — extracting without progress bar)"
+    tar -xzf "$archive" -C "$dest"
+  fi
+}
+
+# ── Smart work directory selection ───────────────────────────────────────────
+# Picks /tmp by default; falls back to the largest mounted filesystem if /tmp
+# doesn't have enough free space for the given minimum (in MB, default 500).
+# Usage: choose_work_dir [min_mb]
+# Prints the chosen base directory to stdout.
+choose_work_dir() {
+  local min_mb="${1:-500}"
+  local min_kb=$(( min_mb * 1024 ))
+
+  # Try /tmp first
+  local tmp_avail
+  tmp_avail="$(df -k /tmp 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [[ -n "$tmp_avail" ]] && (( tmp_avail >= min_kb )); then
+    echo "/tmp"
+    return 0
+  fi
+
+  warn "/tmp has insufficient space (need ${min_mb}MB) — searching for alternative..."
+
+  # Find the mount with the most available space
+  local best_mount=""
+  local best_avail=0
+  while IFS= read -r mount_line; do
+    local avail mount
+    avail="$(echo "$mount_line" | awk '{print $4}')"
+    mount="$(echo "$mount_line" | awk '{print $6}')"
+    # Skip pseudo-filesystems
+    [[ "$mount" == /dev* || "$mount" == /proc* || "$mount" == /sys* || "$mount" == /run* ]] && continue
+    if (( avail > best_avail )); then
+      best_avail="$avail"
+      best_mount="$mount"
+    fi
+  done < <(df -k 2>/dev/null | tail -n +2)
+
+  if [[ -n "$best_mount" ]] && (( best_avail >= min_kb )); then
+    info "Using $best_mount ($(fmt_size $(( best_avail * 1024 ))) free)"
+    echo "$best_mount"
+    return 0
+  fi
+
+  # Last resort: use /tmp anyway and hope for the best
+  warn "No filesystem with ${min_mb}MB free found — using /tmp anyway"
+  echo "/tmp"
+}
+
+# ── Ensure restore dependencies are installed ────────────────────────────────
+# Auto-installs pv and whiptail if missing, using the project's setup helpers.
+ensure_restore_deps() {
+  local missing=()
+
+  command -v pv       >/dev/null 2>&1 || missing+=(pv)
+  command -v whiptail >/dev/null 2>&1 || missing+=(whiptail)
+
+  [[ ${#missing[@]} -eq 0 ]] && return 0
+
+  warn "Missing restore dependencies: ${missing[*]}"
+  info "Attempting to install automatically..."
+
+  require_sudo
+  detect_pkg_manager
+
+  for dep in "${missing[@]}"; do
+    ensure_cmd "$dep" "$dep"
+  done
+
+  # Verify
+  local still_missing=()
+  command -v pv       >/dev/null 2>&1 || still_missing+=(pv)
+  command -v whiptail >/dev/null 2>&1 || still_missing+=(whiptail)
+
+  if [[ ${#still_missing[@]} -gt 0 ]]; then
+    warn "Could not install: ${still_missing[*]} — some features may be degraded"
+  else
+    ok "All restore dependencies installed"
+  fi
+}

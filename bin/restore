@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# bin/restore — Canonical restore command.
+# Thin wrapper around modules/restore/run.sh; use restore.sh at repo root for convenience.
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$SCRIPT_DIR/modules/restore/run.sh" "$@"
