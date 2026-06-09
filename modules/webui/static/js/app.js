@@ -350,7 +350,7 @@ async function downloadAll() {
             if (match) filename = match[1];
         }
         
-        // Read the response body with progress tracking if content-length is available
+        // Read the response body with progress tracking
         const contentLength = res.headers.get('content-length');
         let receivedBytes = 0;
         const chunks = [];
@@ -363,10 +363,13 @@ async function downloadAll() {
             chunks.push(value);
             receivedBytes += value.length;
             
-            // Show progress if we know the total size
+            // Show progress based on received bytes
+            const receivedMB = (receivedBytes / (1024 * 1024)).toFixed(1);
             if (contentLength) {
                 const percent = Math.round((receivedBytes / contentLength) * 100);
-                btn.textContent = `Downloading… ${percent}%`;
+                btn.textContent = `Downloading… ${receivedMB}MB (${percent}%)`;
+            } else {
+                btn.textContent = `Downloading… ${receivedMB}MB`;
             }
         }
         

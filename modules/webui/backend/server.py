@@ -432,15 +432,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         
-        # Calculate total size for Content-Length header
-        total_size = sum(os.path.getsize(f) for f in archives)
-        
         ts = time.strftime("%Y%m%d_%H%M%S")
         self.send_response(200)
         self.send_header("Content-Type", "application/gzip")
         self.send_header("Content-Disposition", f'attachment; filename="backuper_all_{ts}.tar.gz"')
-        # Note: Content-Length is approximate since tar.gz adds some overhead
-        self.send_header("Content-Length", str(int(total_size * 1.02)))
+        # Don't send Content-Length for streaming - compression ratio is variable
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         
