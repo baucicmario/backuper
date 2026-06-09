@@ -328,16 +328,8 @@ async function loadArchives() {
 
 // Check if we should use native download (for files > 2GB)
 async function shouldUseNativeDownload() {
-    try {
-        const res = await fetch('/archives');
-        const data = await res.json();
-        const totalSize = (data.archives || []).reduce((sum, a) => sum + a.size, 0);
-        // Use native download for files larger than 2GB to avoid memory issues
-        return totalSize > (2 * 1024 * 1024 * 1024);
-    } catch (err) {
-        // If we can't determine size, assume it's large and use native
-        return true;
-    }
+    // For download-all, always use native - it's instant and handles any size
+    return true;
 }
 
 async function downloadAll() {
@@ -345,90 +337,30 @@ async function downloadAll() {
     if (!btn) return;
     
     btn.disabled = true;
-    btn.textContent = 'Preparing…';
+    btn.textContent = 'Starting download…';
     
     try {
-        // Check if we should use native download or progressive download
-        const shouldUseNative = await shouldUseNativeDownload();
-        
-        if (shouldUseNative) {
-            // For very large files, use native browser download (simpler, faster)
-            const ts = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '');
-            const a = document.createElement('a');
-            a.href = '/download-all';
-            a.download = `backuper_all_${ts}.tar.gz`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            btn.disabled = false;
-            btn.innerHTML = dlIcon + ' Download All';
-            return;
-        }
-        
-        // For smaller files, use progressive download with progress tracking
-        const res = await fetch('/download-all', { signal: AbortSignal.timeout(600000) });
-        
-        if (!res.ok) {
-            throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-        }
-        
-        btn.textContent = 'Downloading…';
-        
-        // Get filename from Content-Disposition header if available
-        const contentDisposition = res.headers.get('content-disposition');
-        let filename = 'backuper_all.tar.gz';
-        if (contentDisposition) {
-            const match = contentDisposition.match(/filename="([^"]+)"/);
-            if (match) filename = match[1];
-        }
-        
-        // Read the response body with progress tracking
-        const contentLength = res.headers.get('content-length');
-        let receivedBytes = 0;
-        const chunks = [];
-        
-        const reader = res.body.getReader();
-        
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            receivedBytes += value.length;
-            
-            // Show progress based on received bytes
-            const receivedMB = (receivedBytes / (1024 * 1024)).toFixed(1);
-            if (contentLength) {
-                const percent = Math.round((receivedBytes / contentLength) * 100);
-                btn.textContent = `Downloading… ${receivedMB}MB (${percent}%)`;
-            } else {
-                btn.textContent = `Downloading… ${receivedMB}MB`;
-            }
-        }
-        
-        // Combine chunks into a single blob
-        const blob = new Blob(chunks, { type: 'application/gzip' });
-        
-        // Trigger download
-        const url = URL.createObjectURL(blob);
+        // Use native browser download (instant, no memory issues)
+        const ts = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '');
         const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
+        a.href = '/download-all';
+        a.download = `backuper_all_${ts}.tar.gz`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
         
-        btn.disabled = false;
-        btn.innerHTML = dlIcon + ' Download All';
+        // Reset button after a short delay
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = dlIcon + ' Download All';
+        }, 1000);
     } catch (err) {
         console.error('Download failed:', err);
         btn.disabled = false;
         btn.innerHTML = dlIcon + ' Download All';
         btn.style.background = 'var(--error)';
-        btn.style.color = 'white';
         setTimeout(() => {
             btn.style.background = '';
-            btn.style.color = '';
         }, 3000);
         alert('Download failed: ' + (err.message || 'Unknown error'));
     }
