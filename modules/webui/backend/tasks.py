@@ -13,6 +13,7 @@ def run_backup(extra_args):
     """
     Executes the backup process as a background subprocess.
     """
+    import re
     with state.config_lock:
         env_overrides = {
             "CENTRAL_BACKUP_DIR": state.config["backup_dir"],
@@ -48,8 +49,32 @@ def run_backup(extra_args):
                 break
             buf += char
             if char == '\n':
+                line = buf.rstrip("\n")
+                
+                # Check for progress tags
+                m = re.match(r'^\[job-([a-z_]+):\s*(.+)\]$', line)
+                m_pv = re.match(r'^\[pv:\s*(\d+)\]$', line)
+                
                 with state.job_lock:
-                    state.job["log"].append(buf.rstrip("\n"))
+                    if m:
+                        key = m.group(1)
+                        val = m.group(2)
+                        if key in ("progress", "total", "sub_progress", "sub_total"):
+                            try:
+                                state.job[key] = int(val)
+                            except ValueError:
+                                pass
+                        elif key in ("phase", "current", "sub_current_file"):
+                            state.job[key] = val
+                    elif m_pv:
+                        pct = int(m_pv.group(1))
+                        if state.job.get("sub_total", 100) > 100:
+                            state.job["sub_progress"] = int((pct / 100.0) * state.job["sub_total"])
+                        else:
+                            state.job["sub_progress"] = pct
+                    else:
+                        state.job["log"].append(line)
+                
                 buf = ""
             elif buf.endswith("[y/N] "):
                 with state.job_lock:
@@ -129,9 +154,11 @@ def run_restore(selected, backup_dir, split_dir):
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, 
                                 stdin=subprocess.PIPE, text=True, bufsize=1, env=env)
+        with state.restore_lock:
+            state.restore_active_process = proc
                                 
         re_archive = re.compile(r"Archive (\d+) of (\d+)")
-        re_extracting = re.compile(r"Extracting:\s+(.+)")
+        re_extracting = re.compile(r"Extracting:\s+(.+?)(?:\s+\(([\d.]+)([KMG]B)?\))?$")
         re_pv = re.compile(r"(\d+)%")
         
         results = []
@@ -171,6 +198,18 @@ def run_restore(selected, backup_dir, split_dir):
                     if m_ext:
                         state.restore_job["sub_current_file"] = m_ext.group(1).strip()
                         state.restore_job["phase"] = "extracting"
+                        state.restore_job["sub_progress"] = 0
+                        
+                        size_val = m_ext.group(2)
+                        size_unit = m_ext.group(3)
+                        if size_val:
+                            multiplier = 1
+                            if size_unit == "KB": multiplier = 1024
+                            elif size_unit == "MB": multiplier = 1024**2
+                            elif size_unit == "GB": multiplier = 1024**3
+                            state.restore_job["sub_total"] = int(float(size_val) * multiplier)
+                        else:
+                            state.restore_job["sub_total"] = 100
                         continue
                         
                     if "Running restore script" in line:
@@ -185,10 +224,16 @@ def run_restore(selected, backup_dir, split_dir):
                         results.append("Error: " + line.replace("✖", "").strip())
                         
                     if is_pv and m_pv:
-                        state.restore_job["sub_progress"] = int(m_pv.group(1))
+                        pct = int(m_pv.group(1))
+                        # If sub_total > 100, it means it's in bytes. We must set sub_progress in bytes.
+                        if state.restore_job.get("sub_total", 100) > 100:
+                            state.restore_job["sub_progress"] = int((pct / 100.0) * state.restore_job["sub_total"])
+                        else:
+                            state.restore_job["sub_progress"] = pct
 
         proc.wait()
         with state.restore_lock:
+            state.restore_active_process = None
             state.restore_job.update({
                 "running": False, "progress": total, "current": "Done",
                 "phase": "complete", "results": results, "exit_code": proc.returncode
@@ -198,6 +243,7 @@ def run_restore(selected, backup_dir, split_dir):
         with state.job_lock:
             state.job["log"].append(f"[DEBUG] Error during batch restore: {str(e)}")
         with state.restore_lock:
+            state.restore_active_process = None
             state.restore_job.update({
                 "running": False, "progress": total, "current": "Error",
                 "phase": "complete", "results": [f"Fatal Error: {str(e)}"], "exit_code": 1

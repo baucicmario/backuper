@@ -106,6 +106,8 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_batch_restore()
         elif p == "/api/respond":
             self._handle_prompt_response()
+        elif p == "/api/abort":
+            self._handle_abort()
         else:
             self.send_error(404)
 
@@ -175,6 +177,7 @@ class Handler(BaseHTTPRequestHandler):
                     if state.job["running"] or state.restore_job["running"]:
                         self.send_error(409, "Process already running")
                         return
+                    state.job["running"] = True
             threading.Thread(target=tasks.run_backup, args=(extra,), daemon=True).start()
 
         self.send_response(200)
@@ -204,8 +207,15 @@ class Handler(BaseHTTPRequestHandler):
                         self.wfile.write(f"event: prompt\ndata: {json.dumps(prompt)}\n\n".encode())
                     last_prompt = prompt
                 
-                with state.restore_lock:
-                    status_json = json.dumps(state.restore_job)
+                if mode == "run":
+                    with state.job_lock:
+                        # Exclude log and prompt from status payload to save bandwidth
+                        status_dict = {k: v for k, v in state.job.items() if k not in ("log", "prompt")}
+                        status_json = json.dumps(status_dict)
+                else:
+                    with state.restore_lock:
+                        status_json = json.dumps(state.restore_job)
+                        
                 if status_json != last_status_json:
                     self.wfile.write(f"event: status\ndata: {status_json}\n\n".encode())
                     last_status_json = status_json
@@ -246,6 +256,7 @@ class Handler(BaseHTTPRequestHandler):
             if state.job["running"]:
                 self.send_error(409)
                 return
+            state.job["running"] = True
         threading.Thread(target=tasks.run_backup, args=(extra,), daemon=True).start()
         self._send_json({"status": "started"}, 202)
 
@@ -394,6 +405,32 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"ok": False, "error": str(e)}, 500)
             else:
                 self._send_json({"ok": False, "error": "No active prompt"}, 400)
+
+    def _handle_abort(self):
+        """
+        Aborts any currently running backup or restore process.
+        """
+        if not self._check_secret(): self.send_error(403); return
+        aborted = False
+        with state.job_lock:
+            if getattr(state, "active_process", None):
+                try:
+                    state.active_process.terminate()
+                    aborted = True
+                except Exception:
+                    pass
+            state.job["running"] = False
+        with state.restore_lock:
+            if getattr(state, "restore_active_process", None):
+                try:
+                    state.restore_active_process.terminate()
+                    aborted = True
+                except Exception:
+                    pass
+            state.restore_job["running"] = False
+            state.restore_job["phase"] = "complete"
+            state.restore_job["current"] = "Aborted"
+        self._send_json({"ok": True, "aborted": aborted})
 
     def _list_archives(self):
         """

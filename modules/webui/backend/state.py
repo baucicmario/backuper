@@ -19,11 +19,19 @@ job = {
     "log": [],
     "exit_code": None,
     "started": None,
-    "prompt": None
+    "prompt": None,
+    "progress": 0, 
+    "total": 0, 
+    "current": "", 
+    "phase": "idle",
+    "sub_progress": 0, 
+    "sub_total": 0,
+    "sub_current_file": ""
 }
 
 # The active subprocess for the backup/restore job (used for stdin interaction)
 active_process = None
+restore_active_process = None
 
 # Lock for managing the restoration job state
 restore_lock = threading.Lock()

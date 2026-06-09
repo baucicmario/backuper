@@ -276,8 +276,12 @@ for archive_name in "${SELECTED_ARCHIVES[@]}"; do
 
   # ── Restore ──────────────────────────────────────────────────────────
   if bash "$S/05-run-restore.sh" "$extracted_dir"; then
+    if [[ -f "$WORK_DIR/.warning_$archive_name" ]]; then
+      RESULTS_OK+=("$archive_name ${YELLOW}(Hardware device nodes safely skipped)${RESET}")
+    else
+      RESULTS_OK+=("$archive_name")
+    fi
     ok "  Restore complete: $archive_name"
-    RESULTS_OK+=("$archive_name")
     (( SUCCEEDED++ )) || true
   else
     error "  Restore failed: $archive_name"

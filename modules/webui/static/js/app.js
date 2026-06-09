@@ -162,9 +162,31 @@ function runBackup() {
     setStatus('running', 'Running…');
     const logMeta = document.getElementById('log-meta');
     if (logMeta) logMeta.textContent = 'Output — started ' + new Date().toLocaleTimeString();
+    const btnAbort = document.getElementById('btn-abort');
+    if (btnAbort) btnAbort.style.display = 'inline-flex';
+
+    const progressWrap = document.getElementById('job-progress-wrap');
+    const progressBar = document.getElementById('job-progress-bar');
+    const subProgressBar = document.getElementById('sub-progress-bar');
+    const statusText = document.getElementById('job-status-text');
+    const subStatusText = document.getElementById('sub-status-text');
+    const percentText = document.getElementById('job-percent');
+    const subPercentText = document.getElementById('sub-percent');
+    const currentFileText = document.getElementById('job-current-file');
+
+    if (progressWrap) progressWrap.style.display = 'block';
+    if (statusText) statusText.textContent = 'Starting backup...';
+    if (progressBar) progressBar.style.width = '0%';
+    if (subProgressBar) subProgressBar.style.width = '0%';
+    if (percentText) percentText.textContent = '0%';
+    if (subPercentText) subPercentText.textContent = '0%';
+    if (currentFileText) currentFileText.textContent = '';
 
     const qs = flags.length ? '?flags=' + encodeURIComponent(flags.join(' ')) : '';
     es = new EventSource('/stream' + qs);
+    let lastPhase = 'starting';
+
+    es.addEventListener('log', e => appendLog(JSON.parse(e.data)));
     es.addEventListener('line', e => appendLog(JSON.parse(e.data)));
     es.addEventListener('prompt', e => {
         const data = JSON.parse(e.data);
@@ -175,18 +197,63 @@ function runBackup() {
             bd.classList.add('open');
         }
     });
+
+    es.addEventListener('status', e => {
+        const status = JSON.parse(e.data);
+        lastPhase = status.phase || lastPhase;
+
+        if (!status.running && status.phase !== 'complete') return;
+
+        const overallPercent = status.total > 0 ? Math.round((status.progress / status.total) * 100) : 0;
+        if (statusText) statusText.textContent = `Overall: ${status.progress} of ${status.total}`;
+        if (progressBar) progressBar.style.width = overallPercent + '%';
+        if (percentText) percentText.textContent = overallPercent + '%';
+
+        let stepLabel = 'Processing...';
+        let progressInfo = '';
+
+        if (status.phase === 'discover') stepLabel = 'Step 1: Discovering...';
+        else if (status.phase === 'extract') stepLabel = 'Step 2: Extracting configs...';
+        else if (status.phase === 'copy') {
+            stepLabel = 'Step 3: Copying data...';
+            if (status.sub_total > 0) {
+                const mb = (v) => (v / (1024 * 1024)).toFixed(1);
+                progressInfo = ` (${mb(status.sub_progress)}MB / ${mb(status.sub_total)}MB)`;
+            }
+        }
+        else if (status.phase === 'archive') stepLabel = 'Step 4: Archiving...';
+
+        if (subStatusText) subStatusText.textContent = stepLabel + progressInfo;
+        const subPercent = status.sub_total > 0 ? Math.round((status.sub_progress / status.sub_total) * 100) : 0;
+        if (subProgressBar) subProgressBar.style.width = subPercent + '%';
+        if (subPercentText) subPercentText.textContent = subPercent + '%';
+        if (currentFileText) currentFileText.textContent = status.sub_current_file || status.current || '';
+    });
+
     es.addEventListener('done', e => {
         loadArchives();
         const code = parseInt(e.data, 10);
         if (es) { es.close(); es = null; }
         if (btn) btn.disabled = false;
+        if (btnAbort) btnAbort.style.display = 'none';
         setStatus(code === 0 ? 'ok' : 'error', code === 0 ? 'Completed ✓' : 'Failed (exit ' + code + ')');
         appendLog('\n--- backup exited with code ' + code + ' ---');
         if (logMeta) logMeta.textContent = 'Output — finished ' + new Date().toLocaleTimeString();
+        
+        if (code === 0) {
+            if (progressBar) progressBar.style.width = '100%';
+            if (percentText) percentText.textContent = '100%';
+            if (subProgressBar) subProgressBar.style.width = '100%';
+            if (subPercentText) subPercentText.textContent = '100%';
+            if (statusText) statusText.textContent = 'Backup complete ✓';
+            if (subStatusText) subStatusText.textContent = 'Finished';
+            if (currentFileText) currentFileText.textContent = '';
+        }
     });
     es.onerror = () => {
         if (es) { es.close(); es = null; }
         if (btn) btn.disabled = false;
+        if (btnAbort) btnAbort.style.display = 'none';
         setStatus('error', 'Connection lost');
         appendLog('\n--- connection lost ---');
     };
@@ -427,19 +494,21 @@ async function runBatchRestore() {
     if (!confirm(`Are you sure you want to restore ${selected.length} archives?`)) return;
 
     const btn = document.getElementById('btn-restore-action');
-    const progressWrap = document.getElementById('restore-progress-wrap');
-    const progressBar = document.getElementById('restore-progress-bar');
+    const progressWrap = document.getElementById('job-progress-wrap');
+    const progressBar = document.getElementById('job-progress-bar');
     const subProgressBar = document.getElementById('sub-progress-bar');
-    const statusText = document.getElementById('restore-status-text');
+    const statusText = document.getElementById('job-status-text');
     const subStatusText = document.getElementById('sub-status-text');
-    const percentText = document.getElementById('restore-percent');
+    const percentText = document.getElementById('job-percent');
     const subPercentText = document.getElementById('sub-percent');
-    const currentFileText = document.getElementById('restore-current-file');
+    const currentFileText = document.getElementById('job-current-file');
+    const btnAbort = document.getElementById('btn-abort');
 
     if (btn) {
         btn.disabled = true;
         btn.textContent = 'Restoring...';
     }
+    if (btnAbort) btnAbort.style.display = 'inline-flex';
     if (progressWrap) progressWrap.style.display = 'block';
     if (statusText) statusText.textContent = 'Starting restore...';
     if (progressBar) progressBar.style.width = '0%';
@@ -456,10 +525,10 @@ async function runBatchRestore() {
     let lastPhase = 'starting';
 
     const getPhaseDebug = () => {
-        let el = document.getElementById('restore-phase-debug');
+        let el = document.getElementById('job-phase-debug');
         if (!el && progressWrap) {
             el = document.createElement('div');
-            el.id = 'restore-phase-debug';
+            el.id = 'job-phase-debug';
             el.style = 'font-size: 10px; color: var(--muted); margin-top: 5px; font-family: var(--mono); text-align: right; opacity: 0.6;';
             progressWrap.appendChild(el);
         }
@@ -515,12 +584,16 @@ async function runBatchRestore() {
                 btn.disabled = false;
                 btn.textContent = 'Restore Stack';
             }
+            if (btnAbort) btnAbort.style.display = 'none';
             loadArchives();
         }
         sse.close();
     });
 
-    sse.onerror = () => sse.close();
+    sse.onerror = () => {
+        if (btnAbort) btnAbort.style.display = 'none';
+        sse.close();
+    };
 
     try {
         const res = await fetch('/api/restore', {
@@ -536,6 +609,7 @@ async function runBatchRestore() {
                 btn.textContent = 'Restore Stack';
             }
             if (progressWrap) progressWrap.style.display = 'none';
+            if (btnAbort) btnAbort.style.display = 'none';
             sse.close();
         }
     } catch (err) {
@@ -545,7 +619,24 @@ async function runBatchRestore() {
             btn.textContent = 'Restore Stack';
         }
         if (progressWrap) progressWrap.style.display = 'none';
+        if (btnAbort) btnAbort.style.display = 'none';
         sse.close();
+    }
+}
+
+// ── Abort Job ───────────────────────────────────────────────────────────────
+async function abortJob() {
+    if (!confirm('Are you sure you want to abort the running process?')) return;
+    try {
+        const res = await fetch('/api/abort', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+            appendLog('\n--- User requested abort ---');
+        } else {
+            alert('Failed to abort job');
+        }
+    } catch (err) {
+        console.error(err);
     }
 }
 

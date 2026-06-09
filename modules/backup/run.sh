@@ -48,16 +48,23 @@ SERVICE_DIRS=()  # Track all extracted service directories
 # ────────────────────────────────────────────────────────────────────────────
 # STEP 1 — Discover all Dockge stacks
 # ────────────────────────────────────────────────────────────────────────────
+echo "[job-phase: discover]"
 mapfile -t STACK_DIRS < <(bash "$S/01-discover-stacks.sh" "$DOCKGE_STACKS_DIR")
 
 # ────────────────────────────────────────────────────────────────────────────
 # STEP 2 — Extract services from each stack
 # ────────────────────────────────────────────────────────────────────────────
+echo "[job-phase: extract]"
+echo "[job-total: ${#STACK_DIRS[@]}]"
+extract_idx=0
 for stack_dir in "${STACK_DIRS[@]}"; do
   compose_file="$stack_dir/compose.yaml"
   env_file="$stack_dir/.env"
 
   mapfile -t SERVICES < <(bash "$S/02-extract-services.sh" "$compose_file")
+  echo "[job-progress: $extract_idx]"
+  echo "[job-current: $(basename "$stack_dir")]"
+  (( extract_idx++ )) || true
 
   for service in "${SERVICES[@]}"; do
     # Create isolated service folder with its docker-compose.yml
@@ -75,8 +82,14 @@ done
 # ────────────────────────────────────────────────────────────────────────────
 # STEP 3 — Copy bind-mounted data into each service folder
 # ────────────────────────────────────────────────────────────────────────────
+echo "[job-phase: copy]"
+echo "[job-total: ${#SERVICE_DIRS[@]}]"
+copy_idx=0
 for service_dir in "${SERVICE_DIRS[@]}"; do
+  echo "[job-progress: $copy_idx]"
+  echo "[job-current: $(basename "$service_dir")]"
   bash "$S/06-copy-bind-mounts.sh" "$service_dir" "$MOUNT_MODE"
+  (( copy_idx++ )) || true
 done
 
 # ╔══════════════════════════════════════════════════════════╗
@@ -85,6 +98,8 @@ done
 if [[ "$ARCHIVE" != false ]]; then
   bold "STEP 4 — Archiving service packages"
   line
+  echo "[job-phase: archive]"
+  echo "[job-total: ${#SERVICE_DIRS[@]}]"
 
   archived=0
   skipped=0
@@ -102,6 +117,8 @@ if [[ "$ARCHIVE" != false ]]; then
 
     bash "$S/09-archive-service.sh" "$service_dir" "$ARCHIVE_MODE"
     (( archived++ )) || true
+    echo "[job-progress: $((archived + skipped))]"
+    echo "[job-current: $folder_name]"
 
   done < <(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
 
@@ -114,4 +131,5 @@ fi
 # ────────────────────────────────────────────────────────────────────────────
 # STEP 5 — Done
 # ────────────────────────────────────────────────────────────────────────────
+echo "[job-phase: complete]"
 ok "Phase 1 complete — ${#SERVICE_DIRS[@]} service(s) backed up to $OUTPUT_DIR"

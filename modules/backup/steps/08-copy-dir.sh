@@ -16,9 +16,32 @@ fi
 mkdir -p "$DST"
 stderr_file="$(mktemp)"
 
-if cp -a "$SRC/." "$DST/" 2>"$stderr_file"; then
-  ok "Copied: $SRC → $DST"
-  rm -f "$stderr_file"; exit 0
+# Try tar|pv pipeline for precise progress tracking
+if command -v pv >/dev/null 2>&1; then
+  size_bytes=$(du -sb "$SRC" 2>/dev/null | cut -f1 || echo "0")
+  size_mb=$(( size_bytes / 1024 / 1024 ))
+  echo "[job-sub_total: $size_mb]"
+  
+  if [[ "$size_bytes" -gt 0 ]]; then
+    # We pipe stderr of tar to the temp file, and pv's stderr (which has the numbers) to awk
+    if tar cf - -C "$SRC" . 2>"$stderr_file" | pv -n -f -s "$size_bytes" 2>&1 | awk '{print "[pv: "$1"]"; fflush()}' | tar xf - -C "$DST" 2>>"$stderr_file"; then
+      ok "Copied: $SRC → $DST"
+      rm -f "$stderr_file"; exit 0
+    fi
+  else
+    if cp -a "$SRC/." "$DST/" 2>"$stderr_file"; then
+      ok "Copied: $SRC → $DST"
+      rm -f "$stderr_file"; exit 0
+    fi
+  fi
+else
+  # Fallback to cp without progress tracking
+  size_mb=$(du -sm "$SRC" 2>/dev/null | cut -f1 || echo "0")
+  echo "[job-sub_total: $size_mb]"
+  if cp -a "$SRC/." "$DST/" 2>"$stderr_file"; then
+    ok "Copied: $SRC → $DST"
+    rm -f "$stderr_file"; exit 0
+  fi
 fi
 
 if grep -qE 'preserving (times|permissions|ownership)' "$stderr_file"; then
