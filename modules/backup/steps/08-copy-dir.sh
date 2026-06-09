@@ -23,11 +23,16 @@ if command -v pv >/dev/null 2>&1; then
   echo "[job-sub_total: $size_mb]"
   
   if [[ "$size_bytes" -gt 0 ]]; then
-    # We pipe stderr of tar to the temp file, and pv's stderr (which has the numbers) to awk
-    if tar cf - -C "$SRC" . 2>"$stderr_file" | pv -n -f -s "$size_bytes" 2>&1 | awk '{print "[pv: "$1"]"; fflush()}' | tar xf - -C "$DST" 2>>"$stderr_file"; then
+    # We pipe stderr of tar to the temp file
+    # pv's stdout (data) goes to tar xf (via fd 3)
+    # pv's stderr (progress) goes to awk, which outputs to the script's original stdout (fd 5)
+    exec 5>&1
+    if tar cf - -C "$SRC" . 2>"$stderr_file" | ( pv -n -f -s "$size_bytes" 2>&1 1>&3 | awk '{print "[pv: "$1"]"; fflush()}' >&5 ) 3>&1 | tar xf - -C "$DST" 2>>"$stderr_file"; then
+      exec 5>&-
       ok "Copied: $SRC → $DST"
       rm -f "$stderr_file"; exit 0
     fi
+    exec 5>&-
   else
     if cp -a "$SRC/." "$DST/" 2>"$stderr_file"; then
       ok "Copied: $SRC → $DST"

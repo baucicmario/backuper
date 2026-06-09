@@ -44,67 +44,87 @@ async function loadConfig() {
     }
 }
 
-// ── Dirty State Detection ───────────────────────────────────────────────────
+// ── Dirty State Detection & Auto-Save ───────────────────────────────────────
+let _saveTimeout = null;
+
 function markDirty() {
-    const bd = document.getElementById('input-backup-dir').value.trim();
-    const sd = document.getElementById('input-stacks-dir').value.trim();
-    const dirty = (bd !== _savedBackup) || (sd !== _savedStacks);
-    const saveBar = document.getElementById('save-bar');
-    if (saveBar) saveBar.classList.toggle('show', dirty);
-    const saveResult = document.getElementById('save-result');
-    if (saveResult) saveResult.textContent = '';
+    const status = document.getElementById('save-status');
+    if (status) {
+        status.textContent = 'Typing...';
+        status.style.color = 'var(--muted)';
+    }
+    
+    if (_saveTimeout) clearTimeout(_saveTimeout);
+    _saveTimeout = setTimeout(savePaths, 800);
 }
 
 async function savePaths() {
-    const body = {
-        backup_dir: document.getElementById('input-backup-dir').value.trim(),
-        stacks_dir: document.getElementById('input-stacks-dir').value.trim(),
-    };
+    const bd = document.getElementById('input-backup-dir').value.trim();
+    const sd = document.getElementById('input-stacks-dir').value.trim();
+    
+    if (bd === _savedBackup && sd === _savedStacks) {
+        const r = document.getElementById('save-status');
+        if (r) r.textContent = '';
+        return;
+    }
+    
+    const body = { backup_dir: bd, stacks_dir: sd };
+    const status = document.getElementById('save-status');
+    
     try {
+        if (status) {
+            status.textContent = 'Saving...';
+            status.style.color = 'var(--muted)';
+        }
+        
         const res = await fetch('/config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
         const data = await res.json();
-        const r = document.getElementById('save-result');
+        
         if (data.ok) {
-            r.textContent = '✓ Saved';
+            if (status) {
+                status.textContent = '✓ Saved';
+                status.style.color = 'var(--success)';
+                setTimeout(() => { if (status.textContent === '✓ Saved') status.textContent = ''; }, 2000);
+            }
             _savedBackup = body.backup_dir;
             _savedStacks = body.stacks_dir;
-            document.getElementById('save-bar').classList.remove('show');
-            setTimeout(() => { r.textContent = '' }, 2000);
         } else {
-            r.textContent = 'Error: ' + data.error;
-            r.style.color = 'var(--error)';
+            if (status) {
+                status.textContent = 'Error: ' + data.error;
+                status.style.color = 'var(--error)';
+            }
         }
     } catch (e) {
-        alert('Failed to save config: ' + e.message);
+        if (status) {
+            status.textContent = 'Failed to save config';
+            status.style.color = 'var(--error)';
+        }
     }
+}
+
+// ── UI Sections ─────────────────────────────────────────────────────────────
+function toggleSection(btn) {
+    const expanded = btn.getAttribute('aria-expanded') === 'true';
+    btn.setAttribute('aria-expanded', !expanded);
 }
 
 // ── Flag Management ─────────────────────────────────────────────────────────
-const exclusive = [
-    ['--copy-all', '--reject-all'],
-    ['--archive', '--archive-replace']
-];
-
-function toggleFlag(btn) {
-    const flag = btn.dataset.flag,
-        was = btn.classList.contains('active');
-    for (const g of exclusive) {
-        if (g.includes(flag)) {
-            g.forEach(f => {
-                const b = document.querySelector(`[data-flag="${f}"]`);
-                if (b) b.classList.remove('active');
-            });
-        }
-    }
-    btn.classList.toggle('active', !was);
-}
-
 function getFlags() {
-    return Array.from(document.querySelectorAll('.flag-toggle.active')).map(b => b.dataset.flag);
+    const flags = [];
+    const mount = document.querySelector('input[name="flag_mount"]:checked');
+    if (mount && mount.value) flags.push(mount.value);
+    
+    const archive = document.querySelector('input[name="flag_archive"]:checked');
+    if (archive && archive.value) flags.push(archive.value);
+    
+    const force = document.getElementById('flag-force');
+    if (force && force.checked) flags.push(force.value);
+    
+    return flags;
 }
 
 // ── UI Status ───────────────────────────────────────────────────────────────
@@ -212,6 +232,19 @@ function closeSelectionModal() {
     }
 }
 
+function respondToPrompt(answer) {
+    const bd = document.getElementById('prompt-backdrop');
+    if (bd) {
+        bd.classList.remove('open');
+        setTimeout(() => bd.style.display = 'none', 300);
+    }
+    fetch('/api/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answer: answer })
+    }).catch(err => console.error('Failed to respond to prompt:', err));
+}
+
 function toggleAllSelection(check) {
     document.querySelectorAll('.stack-select').forEach(cb => cb.checked = check);
 }
@@ -252,7 +285,7 @@ function executeBackup(stacks) {
     const subPercentText = document.getElementById('sub-percent');
     const currentFileText = document.getElementById('job-current-file');
 
-    if (progressWrap) progressWrap.style.display = 'block';
+    if (progressWrap) progressWrap.classList.add('visible');
     if (statusText) statusText.textContent = 'Starting backup...';
     if (progressBar) progressBar.style.width = '0%';
     if (subProgressBar) subProgressBar.style.width = '0%';
@@ -452,7 +485,7 @@ async function loadArchives() {
     const btnAll = document.getElementById('btn-dl-all');
     if (!grid) return;
     grid.innerHTML = '<div class="archives-empty">Loading…</div>';
-    if (section) section.classList.add('visible');
+    if (section) section.style.display = 'block';
     try {
         const res = await fetch('/archives');
         const data = await res.json();
@@ -461,12 +494,13 @@ async function loadArchives() {
         if (btnAll) btnAll.disabled = (list.length === 0);
         if (list.length === 0) {
             grid.innerHTML = '<div class="archives-empty">No .tar.gz files found in the backup directory.<br>Run a backup with --archive or --archive-replace first.</div>';
+            updateRestoreCount();
             return;
         }
         grid.innerHTML = list.map(a => {
             const encRel = encodeURIComponent(a.name);
             return '<div class="archive-card">' +
-                '<input type="checkbox" class="archive-select" value="' + a.name + '" style="margin-right: 10px;" checked>' +
+                '<input type="checkbox" class="archive-select" value="' + a.name + '" checked>' +
                 '<div class="archive-icon">' + archiveIcon + '</div>' +
                 '<div class="archive-info">' +
                 '<div class="archive-name" title="' + a.name + '">' + a.name + '</div>' +
@@ -475,9 +509,31 @@ async function loadArchives() {
                 '<a class="btn-dl" href="/download/' + encRel + '" download="' + a.name + '">' + dlIcon + ' Download</a>' +
                 '</div>';
         }).join('');
+        
+        // Add event listeners for checkboxes
+        document.querySelectorAll('.archive-select').forEach(cb => {
+            cb.addEventListener('change', updateRestoreCount);
+        });
+        updateRestoreCount();
+        
     } catch (err) {
         grid.innerHTML = '<div class="archives-empty">Error loading archives: ' + err + '</div>';
     }
+}
+
+function updateRestoreCount() {
+    const checkboxes = document.querySelectorAll('.archive-select:checked');
+    const btn = document.getElementById('btn-restore-action');
+    const text = document.getElementById('restore-btn-text');
+    if (btn && text) {
+        text.textContent = `Restore Selected (${checkboxes.length})`;
+        btn.disabled = checkboxes.length === 0;
+    }
+}
+
+function toggleAllArchives(check) {
+    document.querySelectorAll('.archive-select').forEach(cb => cb.checked = check);
+    updateRestoreCount();
 }
 
 // Check if we should use native download (for files > 2GB)
@@ -560,7 +616,7 @@ async function uploadArchive(event) {
 }
 
 // ── Batch Restore ───────────────────────────────────────────────────────────
-async function runBatchRestore() {
+function showRestoreModal() {
     const checkboxes = document.querySelectorAll('.archive-select:checked');
     const selected = Array.from(checkboxes).map(cb => cb.value);
 
@@ -569,7 +625,33 @@ async function runBatchRestore() {
         return;
     }
 
-    if (!confirm(`Are you sure you want to restore ${selected.length} archives?`)) return;
+    const list = document.getElementById('restore-list');
+    if (list) {
+        list.innerHTML = selected.map(a => `<div>• ${a}</div>`).join('');
+    }
+
+    const bd = document.getElementById('restore-backdrop');
+    if (bd) {
+        bd.style.display = 'flex';
+        setTimeout(() => bd.classList.add('open'), 10);
+    }
+}
+
+function closeRestoreModal() {
+    const bd = document.getElementById('restore-backdrop');
+    if (bd) {
+        bd.classList.remove('open');
+        setTimeout(() => bd.style.display = 'none', 300);
+    }
+}
+
+async function confirmBatchRestore() {
+    closeRestoreModal();
+    
+    const checkboxes = document.querySelectorAll('.archive-select:checked');
+    const selected = Array.from(checkboxes).map(cb => cb.value);
+
+    if (selected.length === 0) return;
 
     const btn = document.getElementById('btn-restore-action');
     const progressWrap = document.getElementById('job-progress-wrap');
@@ -582,12 +664,13 @@ async function runBatchRestore() {
     const currentFileText = document.getElementById('job-current-file');
     const btnAbort = document.getElementById('btn-abort');
 
-    if (btn) {
+    const textBtn = document.getElementById('restore-btn-text');
+    if (btn && textBtn) {
         btn.disabled = true;
-        btn.textContent = 'Restoring...';
+        textBtn.textContent = 'Restoring...';
     }
     if (btnAbort) btnAbort.style.display = 'inline-flex';
-    if (progressWrap) progressWrap.style.display = 'block';
+    if (progressWrap) progressWrap.classList.add('visible');
     if (statusText) statusText.textContent = 'Starting restore...';
     if (progressBar) progressBar.style.width = '0%';
     if (subProgressBar) subProgressBar.style.width = '0%';
@@ -658,10 +741,10 @@ async function runBatchRestore() {
             if (statusText) statusText.textContent = 'Restore complete ✓';
             if (subStatusText) subStatusText.textContent = 'Finished';
             if (currentFileText) currentFileText.textContent = '';
-            if (btn) {
+            if (btn && textBtn) {
                 btn.disabled = false;
-                btn.textContent = 'Restore Stack';
             }
+            updateRestoreCount();
             if (btnAbort) btnAbort.style.display = 'none';
             loadArchives();
         }
@@ -682,21 +765,21 @@ async function runBatchRestore() {
         const data = await res.json();
         if (!res.ok) {
             alert('Error: ' + (data.error || 'Unknown error'));
-            if (btn) {
+            if (btn && textBtn) {
                 btn.disabled = false;
-                btn.textContent = 'Restore Stack';
             }
-            if (progressWrap) progressWrap.style.display = 'none';
+            updateRestoreCount();
+            if (progressWrap) progressWrap.classList.remove('visible');
             if (btnAbort) btnAbort.style.display = 'none';
             sse.close();
         }
     } catch (err) {
         alert('Restore failed: ' + err.message);
-        if (btn) {
+        if (btn && textBtn) {
             btn.disabled = false;
-            btn.textContent = 'Restore Stack';
         }
-        if (progressWrap) progressWrap.style.display = 'none';
+        updateRestoreCount();
+        if (progressWrap) progressWrap.classList.remove('visible');
         if (btnAbort) btnAbort.style.display = 'none';
         sse.close();
     }

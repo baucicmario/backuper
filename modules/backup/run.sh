@@ -33,7 +33,13 @@ while [[ $# -gt 0 ]]; do
     --force)       FORCE=true ;;
     --copy-all)    MOUNT_MODE=copy-all ;;
     --reject-all)  MOUNT_MODE=reject-all ;;
-    --archive)     ARCHIVE=true ;;
+    --archive)
+        ARCHIVE=true
+        ARCHIVE_MODE=keep
+        ;;
+    --no-archive)
+        ARCHIVE=false
+        ;;
     --archive-replace)
         ARCHIVE=true
         ARCHIVE_MODE=replace

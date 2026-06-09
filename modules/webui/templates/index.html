@@ -37,76 +37,150 @@
 </header>
 
 <main>
-    <div class="card">
-        <div class="card-title">Run Backup</div>
-        <div class="run-grid">
-            <!-- top row: big button + flags -->
-            <div class="run-top">
-                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <button id="btn-backup" class="btn btn-primary btn-lg" onclick="runBackup()">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                        Run Backup Now
-                    </button>
-                    <button id="btn-restore" class="btn btn-secondary btn-lg" onclick="document.getElementById('restore-upload').click()">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                        Upload Archive
-                    </button>
-                    <button id="btn-restore-action" class="btn btn-restore-stub btn-lg" onclick="runBatchRestore()">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
-                        Restore Stack
-                    </button>
-                    <button id="btn-abort" class="btn btn-lg" style="display: none; background: var(--error); color: white;" onclick="abortJob()">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
-                        Abort
-                    </button>
-                    
-                    <div id="job-progress-wrap" style="display: none; width: 100%; min-height: 124px; margin-top: 1rem; background: var(--surface-2); padding: 0.75rem; border-radius: var(--radius); border: 1px solid var(--border); box-sizing: border-box; overflow: hidden;">
-                        <!-- Overall Progress -->
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; height: 1.2rem; overflow: hidden;">
-                            <span id="job-status-text" style="font-size: 0.75rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; margin-right: 1rem;">Overall Progress</span>
-                            <span id="job-percent" style="font-size: 0.75rem; font-family: var(--mono); color: var(--primary); font-weight: 600; flex-shrink: 0; width: 40px; text-align: right;">0%</span>
-                        </div>
-                        <div style="width: 100%; background: var(--surface-3); height: 6px; border-radius: 3px; overflow: hidden; border: 1px solid var(--border); margin-bottom: 0.8rem;">
-                            <div id="job-progress-bar" style="width: 0%; background: var(--primary); height: 100%; transition: width 0.3s ease;"></div>
-                        </div>
-
-                        <!-- Sub-task Progress -->
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; height: 1.1rem; overflow: hidden;">
-                            <span id="sub-status-text" style="font-size: 0.7rem; font-weight: 500; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; margin-right: 1rem;">Current Task</span>
-                            <span id="sub-percent" style="font-size: 0.7rem; font-family: var(--mono); color: var(--warn); font-weight: 600; flex-shrink: 0; width: 40px; text-align: right;">0%</span>
-                        </div>
-                        <div style="width: 100%; background: var(--surface-3); height: 6px; border-radius: 3px; overflow: hidden; border: 1px solid var(--border);">
-                            <div id="sub-progress-bar" style="width: 0%; background: var(--warn); height: 100%; transition: width 0.3s ease;"></div>
-                        </div>
-                        <div id="job-current-file" style="margin-top: 0.5rem; font-size: 0.65rem; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; height: 1rem; line-height: 1rem;"></div>
-                    </div>
-                    <input type="file" id="restore-upload" style="display: none;" accept=".tar.gz,.zip" onchange="uploadArchive(event)">
+    <!-- ── BACKUP SECTION ────────────────────────────────────────────────── -->
+    <section id="backup-section" class="section-block">
+        <div class="section-header">
+            <div class="section-title">Backup</div>
+            <button id="btn-backup" class="btn btn-primary btn-lg" onclick="runBackup()">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                Run Backup Now
+            </button>
+        </div>
+        
+        <div class="section-collapsible">
+            <button class="section-toggle" aria-expanded="false" onclick="toggleSection(this)">
+                Backup Options
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+            <div class="section-content">
+                <div class="option-group">
+                    <div class="option-group-title">Mount Handling</div>
+                    <label class="option-label">
+                        <input type="radio" name="flag_mount" value="" checked>
+                        Prompt per mount (default)
+                    </label>
+                    <label class="option-label">
+                        <input type="radio" name="flag_mount" value="--copy-all">
+                        Copy all mounts automatically
+                    </label>
+                    <label class="option-label">
+                        <input type="radio" name="flag_mount" value="--reject-all">
+                        Skip all mounts (config only)
+                    </label>
                 </div>
-                
-                <div style="display: flex; flex-direction: column; gap: 0.625rem; flex: 1; min-width: 280px;">
-                    <p style="font-size:.75rem;color:var(--muted);margin-top:.15rem;font-weight:500;">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-.15em;margin-right:.1rem"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-                        Prompt for larger mounts is on by default
-                    </p>
-                    <div class="flags">
-                        <button class="flag-toggle" data-flag="--copy-all" onclick="toggleFlag(this)" title="Copy all bind mounts without prompting">copy-all-mounts</button>
-                        <button class="flag-toggle" data-flag="--reject-all" onclick="toggleFlag(this)" title="Skip all bind mounts (config only)">config-mounts-only</button>
-                    </div>
-                    
-                    <hr style="border: 0; height: 1px; background: var(--border); margin: 0;">
-                    
-                    <p style="font-size:.75rem;color:var(--muted);margin-top:.15rem;font-weight:500;">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-.15em;margin-right:.1rem"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-                        by default, the backup will produce just archives.
-                    </p>
-                    <div class="flags">
-                        <button class="flag-toggle" data-flag="--force" onclick="toggleFlag(this)" title="Overwrite existing output folders">overwrite-existing-backups</button>
-                        <button class="flag-toggle" data-flag="--archive" onclick="toggleFlag(this)" title="Pack each service dir into .tar.gz">include folders</button>
-                    </div>
+
+                <div class="option-group">
+                    <div class="option-group-title">Output Options</div>
+                    <label class="option-label">
+                        <input type="checkbox" id="flag-force" value="--force">
+                        Overwrite existing backups
+                    </label>
+                </div>
+
+                <div class="option-group">
+                    <div class="option-group-title">Archive Options</div>
+                    <label class="option-label">
+                        <input type="radio" name="flag_archive" value="--no-archive">
+                        Leave as folders (no archive)
+                    </label>
+                    <label class="option-label">
+                        <input type="radio" name="flag_archive" value="--archive">
+                        Create archives alongside folders
+                    </label>
+                    <label class="option-label">
+                        <input type="radio" name="flag_archive" value="--archive-replace" checked>
+                        Create archives and remove folders
+                    </label>
                 </div>
             </div>
+        </div>
+    </section>
 
-            <!-- path row: always visible, right under the button -->
+    <!-- ── PROGRESS SECTION ──────────────────────────────────────────────── -->
+    <section id="progress-section" class="progress-section">
+        <div class="progress-row">
+            <span class="progress-label" id="job-status-text">Overall Progress</span>
+            <span class="progress-percent" id="job-percent">0%</span>
+        </div>
+        <div class="progress-track">
+            <div class="progress-fill" id="job-progress-bar"></div>
+        </div>
+
+        <div class="progress-row" style="margin-top: 0.5rem;">
+            <span class="progress-label" id="sub-status-text" style="color: var(--muted); font-size: 0.7rem;">Current Task</span>
+            <span class="progress-percent warn" id="sub-percent" style="font-size: 0.7rem;">0%</span>
+        </div>
+        <div class="progress-track">
+            <div class="progress-fill warn" id="sub-progress-bar"></div>
+        </div>
+        
+        <div id="job-current-file" class="progress-current-file"></div>
+        
+        <div class="progress-actions">
+            <button id="btn-abort" class="btn" style="display: none; background: var(--error); color: white;" onclick="abortJob()">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+                Abort
+            </button>
+        </div>
+    </section>
+
+    <!-- ── LOG OUTPUT ────────────────────────────────────────────────────── -->
+    <div id="log-wrap">
+        <div class="log-header">
+            <span class="log-meta" id="log-meta">Output</span>
+            <button id="btn-clear" onclick="clearLog()">Clear</button>
+        </div>
+        <pre id="log" role="log" aria-live="polite" aria-label="Job output"></pre>
+    </div>
+
+    <!-- ── ARCHIVES SECTION ──────────────────────────────────────────────── -->
+    <section id="archives-section" class="section-block" style="display: none;">
+        <div class="archives-header" style="margin-bottom: 1rem;">
+            <div>
+                <div class="section-title" style="margin-bottom:.25rem">Archives</div>
+                <div class="archive-count" id="archive-count">—</div>
+            </div>
+        </div>
+
+        <div class="archives-actions">
+            <button id="btn-restore" class="btn btn-secondary" onclick="document.getElementById('restore-upload').click()">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                Upload Archive
+            </button>
+            <input type="file" id="restore-upload" style="display: none;" accept=".tar.gz,.zip" onchange="uploadArchive(event)">
+            
+            <button id="btn-dl-all" class="btn btn-primary" style="margin-left: auto;" onclick="downloadAll()">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Download All
+            </button>
+            <button class="btn btn-ghost" onclick="loadArchives()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                Refresh
+            </button>
+        </div>
+
+        <div style="margin-bottom: 0.75rem; display: flex; gap: 0.5rem;">
+            <button class="btn btn-ghost" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;" onclick="toggleAllArchives(true)">Select All</button>
+            <button class="btn btn-ghost" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;" onclick="toggleAllArchives(false)">Deselect All</button>
+        </div>
+
+        <div id="archive-grid" class="archive-grid"></div>
+
+        <div class="restore-footer">
+            <button id="btn-restore-action" class="btn btn-restore-stub btn-lg" onclick="showRestoreModal()" disabled>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+                <span id="restore-btn-text">Restore Selected (0)</span>
+            </button>
+        </div>
+    </section>
+
+    <!-- ── SETTINGS SECTION ──────────────────────────────────────────────── -->
+    <section id="settings-section" class="section-collapsible" style="margin-top: 0.5rem;">
+        <button class="section-toggle" aria-expanded="false" onclick="toggleSection(this)">
+            Settings & Paths
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+        <div class="section-content">
             <div class="path-row">
                 <div class="path-field">
                     <label class="path-label" for="input-backup-dir">
@@ -133,43 +207,9 @@
                     </div>
                 </div>
             </div>
-
-            <!-- save bar: only appears when paths are edited -->
-            <div class="save-bar" id="save-bar">
-                <span>Unsaved path changes</span>
-                <button onclick="savePaths()">Save</button>
-                <div id="save-result" style="font-size:.78125rem;color:var(--success)"></div>
-            </div>
+            <div id="save-status" style="font-size:0.75rem; color:var(--success); margin-top: 0.75rem; text-align: right; height: 1rem;"></div>
         </div>
-    </div>
-
-    <div id="log-wrap">
-        <div class="log-header">
-            <span class="log-meta" id="log-meta">Output</span>
-            <button id="btn-clear" onclick="clearLog()">Clear</button>
-        </div>
-        <pre id="log" role="log" aria-live="polite" aria-label="Backup output"></pre>
-    </div>
-
-    <div id="archives-section" class="visible">
-        <div class="archives-header">
-            <div>
-                <div class="card-title" style="margin-bottom:.25rem">Archives</div>
-                <div class="archive-count" id="archive-count">—</div>
-            </div>
-            <div style="display:flex;gap:.5rem;align-items:center">
-                <button class="btn btn-ghost" style="font-size:.8125rem" onclick="loadArchives()">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-                    Refresh
-                </button>
-                <button id="btn-dl-all" class="btn-dl-all" onclick="downloadAll()">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                    Download All
-                </button>
-            </div>
-        </div>
-        <div id="archive-grid" class="archive-grid"></div>
-    </div>
+    </section>
 </main>
 
 <!-- ── File browser modal ───────────────────────────────────────────── -->
@@ -242,6 +282,30 @@
             <div class="modal-actions" style="width: 100%; justify-content: flex-end;">
                 <button class="btn btn-ghost" onclick="closeSelectionModal()" style="margin-right: 0.5rem;">Cancel</button>
                 <button class="btn btn-primary" onclick="confirmSelection()">Confirm Backup</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Restore Confirmation Modal ───────────────────────────────────────────── -->
+<div class="backdrop" id="restore-backdrop" role="dialog" aria-modal="true" style="z-index: 1000; display: none;">
+    <div class="modal">
+        <div class="modal-head">
+            <span class="modal-head-title">Confirm Restore</span>
+            <button class="modal-close" onclick="closeRestoreModal()" aria-label="Close">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <div class="modal-body" style="padding: 1rem; max-height: 60vh; overflow-y: auto;">
+            <p style="margin-bottom: 1rem; color: var(--text);">You are about to restore the following archives. This action will extract the contents to your stacks directory.</p>
+            <div id="restore-list" style="display: flex; flex-direction: column; gap: 0.5rem; font-family: var(--mono); font-size: 0.8rem; color: var(--primary);">
+                <!-- List will be injected here -->
+            </div>
+        </div>
+        <div class="modal-foot">
+            <div class="modal-actions" style="width: 100%; justify-content: flex-end;">
+                <button class="btn btn-ghost" onclick="closeRestoreModal()" style="margin-right: 0.5rem;">Cancel</button>
+                <button class="btn btn-restore-stub" onclick="confirmBatchRestore()">Restore Now</button>
             </div>
         </div>
     </div>
