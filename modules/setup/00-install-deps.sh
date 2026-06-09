@@ -18,6 +18,7 @@ ensure_cmd curl    curl
 ensure_cmd wget    wget
 ensure_cmd jq      jq
 ensure_cmd whiptail whiptail
+ensure_cmd pv      pv
 
 # ── yq ────────────────────────────────────
 if command -v yq >/dev/null 2>&1; then
@@ -37,7 +38,7 @@ ensure_docker_compose
 
 line
 bold "Summary:"
-for tool in curl wget jq whiptail yq; do
+for tool in curl wget jq whiptail pv yq; do
   command -v "$tool" >/dev/null 2>&1 \
     && echo -e "  ${GREEN}✔ $tool${RESET}" \
     || echo -e "  ${RED}✖ $tool${RESET}"
