@@ -24,7 +24,7 @@ if command -v pv >/dev/null 2>&1; then
   
   if [[ "$size_bytes" -gt 0 ]]; then
     # We pipe stderr of tar to the temp file, and pv's stderr (which has the numbers) to awk
-    if tar cf - -C "$SRC" . 2>"$stderr_file" | pv -n -f -s "$size_bytes" 2>&1 | awk '{print "[pv: "$1"]"; fflush()}' | tar xf - -C "$DST" 2>>"$stderr_file"; then
+    if ( tar cf - -C "$SRC" . 2>"$stderr_file" | pv -n -f -s "$size_bytes" | tar xf - -C "$DST" 2>>"$stderr_file" ) 2>&1 | awk '{print "[pv: "$1"]"; fflush()}'; then
       ok "Copied: $SRC → $DST"
       rm -f "$stderr_file"; exit 0
     fi
