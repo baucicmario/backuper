@@ -194,6 +194,28 @@
     </div>
 </div>
 
+<!-- ── Prompt modal ───────────────────────────────────────────── -->
+<div class="backdrop" id="prompt-backdrop" role="dialog" aria-modal="true" style="z-index: 1000;">
+    <div class="modal">
+        <div class="modal-head">
+            <span class="modal-head-title" style="color: var(--warn)">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;vertical-align:-.1em;margin-right:.2rem"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                Action Required
+            </span>
+        </div>
+        <div class="modal-body" style="padding: 1rem; max-height: 60vh; overflow-y: auto;">
+            <p id="prompt-context" style="white-space: pre-wrap; font-family: var(--mono); font-size: 0.8rem; background: var(--surface-2); padding: 0.75rem; border-radius: var(--radius); color: var(--text);"></p>
+            <p id="prompt-text" style="margin-top: 1rem; font-weight: 600; font-size: 0.9rem; color: var(--warn);"></p>
+        </div>
+        <div class="modal-foot">
+            <div class="modal-actions" style="width: 100%; justify-content: flex-end;">
+                <button class="btn btn-ghost" onclick="respondToPrompt('n')" style="margin-right: 0.5rem;">Skip (No)</button>
+                <button class="btn btn-primary" onclick="respondToPrompt('y')">Copy (Yes)</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="/static/js/app.js"></script>
 </body>
 </html>

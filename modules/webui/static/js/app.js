@@ -166,6 +166,15 @@ function runBackup() {
     const qs = flags.length ? '?flags=' + encodeURIComponent(flags.join(' ')) : '';
     es = new EventSource('/stream' + qs);
     es.addEventListener('line', e => appendLog(JSON.parse(e.data)));
+    es.addEventListener('prompt', e => {
+        const data = JSON.parse(e.data);
+        const bd = document.getElementById('prompt-backdrop');
+        if(bd) {
+            document.getElementById('prompt-context').textContent = data.context ? data.context.join('\n') : '';
+            document.getElementById('prompt-text').textContent = data.text || 'Action required';
+            bd.classList.add('open');
+        }
+    });
     es.addEventListener('done', e => {
         loadArchives();
         const code = parseInt(e.data, 10);
@@ -537,6 +546,21 @@ async function runBatchRestore() {
         }
         if (progressWrap) progressWrap.style.display = 'none';
         sse.close();
+    }
+}
+
+// ── Prompt Response ─────────────────────────────────────────────────────────
+async function respondToPrompt(answer) {
+    const bd = document.getElementById('prompt-backdrop');
+    if(bd) bd.classList.remove('open');
+    try {
+        await fetch('/api/respond', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ answer })
+        });
+    } catch(err) {
+        appendLog('\n--- Failed to respond to prompt: ' + err.message + ' ---');
     }
 }
 

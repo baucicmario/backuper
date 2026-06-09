@@ -130,7 +130,11 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
   echo -e "  Host path      : $host_path"
   echo -e "  Container path : $container_path"
   printf "  Copy it? [y/N] "
-  read -r answer </dev/tty
+  if [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
+    read -r answer
+  else
+    read -r answer </dev/tty 2>/dev/null || read -r answer
+  fi
   if [[ "${answer,,}" == "y" ]]; then
     bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
   else

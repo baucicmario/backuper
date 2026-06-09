@@ -17,6 +17,9 @@ WORK_DIR="${1:?Usage: 02-discover-archives.sh <work_dir>}"
 
 count=0
 while IFS= read -r -d '' archive; do
+  if is_archive_bundle "$archive"; then
+    continue
+  fi
   name="$(basename "$archive")"
   size="$(stat -c%s "$archive" 2>/dev/null || stat -f%z "$archive" 2>/dev/null || echo 0)"
   info "  Found: $name  ($(fmt_size "$size"))" >&2

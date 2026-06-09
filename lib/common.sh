@@ -172,7 +172,7 @@ extract_with_progress() {
   info "  Extracting: $label  ($(fmt_size "$size"))"
 
   if command -v pv >/dev/null 2>&1; then
-    pv -N "$label" -s "$size" "$archive" | tar -xzf - -C "$dest"
+    pv -f -N "$label" -s "$size" "$archive" | tar -xzf - -C "$dest"
   else
     warn "  (pv not available — extracting without progress bar)"
     tar -xzf "$archive" -C "$dest"
@@ -254,4 +254,31 @@ ensure_restore_deps() {
   else
     ok "All restore dependencies installed"
   fi
+}
+
+# ── Detect if an archive is a bundle ─────────────────────────────────────────
+# Usage: is_archive_bundle <archive_path>  → returns 0 (true) if bundle, 1 (false) otherwise
+is_archive_bundle() {
+  local file="$1"
+  local top_level_tarballs=0
+  local distinct_top_levels=0
+
+  while IFS= read -r entry; do
+    local top="$(echo "$entry" | cut -d'/' -f1)"
+    if [[ "$entry" =~ \.tar\.gz$ ]] && [[ "$entry" == "$top" || "$entry" == "$top/" ]]; then
+      (( top_level_tarballs++ )) || true
+    fi
+  done < <(tar -tzf "$file" 2>/dev/null | head -100)
+
+  distinct_top_levels="$(tar -tzf "$file" 2>/dev/null | cut -d'/' -f1 | sort -u | wc -l)"
+
+  if (( top_level_tarballs >= 2 )); then
+    return 0
+  elif (( distinct_top_levels > 1 )); then
+    local tarball_count="$(tar -tzf "$file" 2>/dev/null | grep -cE '^[^/]+\.tar\.gz$' || echo 0)"
+    if (( tarball_count >= 2 )); then
+      return 0
+    fi
+  fi
+  return 1
 }
