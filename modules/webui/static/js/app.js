@@ -326,6 +326,20 @@ async function loadArchives() {
     }
 }
 
+// Check if we should use native download (for files > 2GB)
+async function shouldUseNativeDownload() {
+    try {
+        const res = await fetch('/archives');
+        const data = await res.json();
+        const totalSize = (data.archives || []).reduce((sum, a) => sum + a.size, 0);
+        // Use native download for files larger than 2GB to avoid memory issues
+        return totalSize > (2 * 1024 * 1024 * 1024);
+    } catch (err) {
+        // If we can't determine size, assume it's large and use native
+        return true;
+    }
+}
+
 async function downloadAll() {
     const btn = document.getElementById('btn-dl-all');
     if (!btn) return;
@@ -334,7 +348,25 @@ async function downloadAll() {
     btn.textContent = 'Preparing…';
     
     try {
-        const res = await fetch('/download-all', { signal: AbortSignal.timeout(600000) }); // 10 min timeout
+        // Check if we should use native download or progressive download
+        const shouldUseNative = await shouldUseNativeDownload();
+        
+        if (shouldUseNative) {
+            // For very large files, use native browser download (simpler, faster)
+            const ts = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '');
+            const a = document.createElement('a');
+            a.href = '/download-all';
+            a.download = `backuper_all_${ts}.tar.gz`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            btn.disabled = false;
+            btn.innerHTML = dlIcon + ' Download All';
+            return;
+        }
+        
+        // For smaller files, use progressive download with progress tracking
+        const res = await fetch('/download-all', { signal: AbortSignal.timeout(600000) });
         
         if (!res.ok) {
             throw new Error(`HTTP ${res.status}: ${res.statusText}`);
