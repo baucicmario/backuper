@@ -16,3 +16,5 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+modules/webui/backend/__pycache__/*
+modules/webui/backend/__pycache__/server.cpython-314.pyc
