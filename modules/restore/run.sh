@@ -29,6 +29,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --work-dir)     shift; WORK_DIR="$1" ;;
     --select-all)   SELECT_ALL=true ;;
+    --no-prompts)   NO_PROMPTS=true ;;
     --dry-run)      DRY_RUN=true ;;
     --archives)
       shift
@@ -116,28 +117,31 @@ elif [[ -d "$SOURCE_PATH" ]]; then
   done < <(find "$SOURCE_PATH" -maxdepth 1 -type f -name "*.tar.gz" -print0 | sort -z)
 fi
 
-# Ask if user wants to add more archives
-while confirm_prompt "Do you want to add another archive or directory?"; do
-  echo
-  printf "  Enter path to archive or directory: "
-  read -r ADDITIONAL_PATH </dev/tty
-  if [[ -z "$ADDITIONAL_PATH" ]]; then
-    warn "  No path entered — skipping"
-    continue
-  fi
-  if [[ ! -e "$ADDITIONAL_PATH" ]]; then
-    warn "  Path not found: $ADDITIONAL_PATH — skipping"
-    continue
-  fi
-  bash "$S/01-intake.sh" "$ADDITIONAL_PATH" "$WORK_DIR" "$DRY_RUN"
-  if [[ -f "$ADDITIONAL_PATH" ]]; then
-    ORIGINAL_SOURCES+=("$(realpath "$ADDITIONAL_PATH")")
-  elif [[ -d "$ADDITIONAL_PATH" ]]; then
-    while IFS= read -r -d '' archive; do
-      ORIGINAL_SOURCES+=("$(realpath "$archive")")
-    done < <(find "$ADDITIONAL_PATH" -maxdepth 1 -type f -name "*.tar.gz" -print0 | sort -z)
-  fi
-done
+if [[ "${NO_PROMPTS:-false}" == true ]]; then
+  info "Skipping additional archive prompt (--no-prompts)"
+else
+  while confirm_prompt "Do you want to add another archive or directory?"; do
+    echo
+    printf "  Enter path to archive or directory: "
+    read -r ADDITIONAL_PATH </dev/tty
+    if [[ -z "$ADDITIONAL_PATH" ]]; then
+      warn "  No path entered — skipping"
+      continue
+    fi
+    if [[ ! -e "$ADDITIONAL_PATH" ]]; then
+      warn "  Path not found: $ADDITIONAL_PATH — skipping"
+      continue
+    fi
+    bash "$S/01-intake.sh" "$ADDITIONAL_PATH" "$WORK_DIR" "$DRY_RUN"
+    if [[ -f "$ADDITIONAL_PATH" ]]; then
+      ORIGINAL_SOURCES+=("$(realpath "$ADDITIONAL_PATH")")
+    elif [[ -d "$ADDITIONAL_PATH" ]]; then
+      while IFS= read -r -d '' archive; do
+        ORIGINAL_SOURCES+=("$(realpath "$archive")")
+      done < <(find "$ADDITIONAL_PATH" -maxdepth 1 -type f -name "*.tar.gz" -print0 | sort -z)
+    fi
+  done
+fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 2 — Discover archives in work directory
@@ -272,8 +276,12 @@ for archive_name in "${SELECTED_ARCHIVES[@]}"; do
 
   # ── Restore ──────────────────────────────────────────────────────────
   if bash "$S/05-run-restore.sh" "$extracted_dir"; then
+    if [[ -f "$WORK_DIR/.warning_$archive_name" ]]; then
+      RESULTS_OK+=("$archive_name ${YELLOW}(Hardware device nodes safely skipped)${RESET}")
+    else
+      RESULTS_OK+=("$archive_name")
+    fi
     ok "  Restore complete: $archive_name"
-    RESULTS_OK+=("$archive_name")
     (( SUCCEEDED++ )) || true
   else
     error "  Restore failed: $archive_name"
@@ -364,12 +372,16 @@ if [[ ${#EXISTING_SOURCES[@]} -gt 0 ]]; then
       echo -e "    ${YELLOW}•${RESET} $src  ($(fmt_size "$local_size"))"
     done
     echo
-    if confirm_prompt "Delete these original source archive(s)?"; then
-      for src in "${EXISTING_SOURCES[@]}"; do
-        rm -f "$src" && ok "  Deleted: $src" || warn "  Could not delete: $src"
-      done
+    if [[ "${NO_PROMPTS:-false}" == true ]]; then
+      info "  Keeping original source archive(s) (--no-prompts)"
     else
-      info "  Keeping original source archive(s)"
+      if confirm_prompt "Delete these original source archive(s)?"; then
+        for src in "${EXISTING_SOURCES[@]}"; do
+          rm -f "$src" && ok "  Deleted: $src" || warn "  Could not delete: $src"
+        done
+      else
+        info "  Keeping original source archive(s)"
+      fi
     fi
   fi
 fi

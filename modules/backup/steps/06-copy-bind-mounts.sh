@@ -53,6 +53,9 @@ is_known_config() {
   return 1
 }
 
+# Duplicate original stdin (from python/user) to fd 3 so we can read from it inside the piped loop
+exec 3<&0
+
 yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_volume; do
   [[ -z "$raw_volume" ]] && continue
 
@@ -130,13 +133,20 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
   echo -e "  Host path      : $host_path"
   echo -e "  Container path : $container_path"
   printf "  Copy it? [y/N] "
-  read -r answer </dev/tty
+  if [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
+    read -r answer <&3
+  else
+    read -r answer </dev/tty 2>/dev/null || read -r answer <&3
+  fi
   if [[ "${answer,,}" == "y" ]]; then
+    info "  Copying large mount (this may take a while)..."
     bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
   else
-    warn "Skipped: $host_path"
+    warn "  Skipped: $host_path"
   fi
 
 done
+
+exec 3<&-
 
 ok "Bind-mount copy complete for: $(basename "$SERVICE_DIR")"

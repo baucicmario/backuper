@@ -172,10 +172,26 @@ extract_with_progress() {
   info "  Extracting: $label  ($(fmt_size "$size"))"
 
   if command -v pv >/dev/null 2>&1; then
-    pv -N "$label" -s "$size" "$archive" | tar -xzf - -C "$dest"
+    pv -f -N "$label" -s "$size" "$archive" | tar -xzf - -C "$dest" || {
+      local st=$?
+      if [[ $st -eq 2 ]]; then
+        warn "  (tar warning: skipped restoring raw hardware device nodes [e.g., /dev/dri]. This is normal and expected.)"
+        touch "$dest/.warning_$label"
+      else
+        return $st
+      fi
+    }
   else
     warn "  (pv not available — extracting without progress bar)"
-    tar -xzf "$archive" -C "$dest"
+    tar -xzf "$archive" -C "$dest" || {
+      local st=$?
+      if [[ $st -eq 2 ]]; then
+        warn "  (tar warning: skipped restoring raw hardware device nodes [e.g., /dev/dri]. This is normal and expected.)"
+        touch "$dest/.warning_$label"
+      else
+        return $st
+      fi
+    }
   fi
 }
 
@@ -254,4 +270,19 @@ ensure_restore_deps() {
   else
     ok "All restore dependencies installed"
   fi
+}
+
+# ── Detect if an archive is a bundle ─────────────────────────────────────────
+# Usage: is_archive_bundle <archive_path>  → returns 0 (true) if bundle, 1 (false) otherwise
+is_archive_bundle() {
+  local file="$1"
+  # Fetch just the first 3 entries to avoid decompressing huge archives completely
+  local entries
+  entries="$(tar -tzf "$file" 2>/dev/null | head -3)" || true
+  
+  # A bundle contains .tar.gz files at the root level (no slashes before .tar.gz)
+  if echo "$entries" | grep -qE '^[^/]+\.tar\.gz$'; then
+    return 0
+  fi
+  return 1
 }

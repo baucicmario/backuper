@@ -34,34 +34,9 @@ process_file() {
 
   info "  Inspecting archive: $file_name"
 
-  # List top-level contents of the archive
-  local top_level_tarballs=0
-  local top_level_dirs=0
-
-  while IFS= read -r entry; do
-    # Normalize: strip trailing slash, get top-level component only
-    local top="$(echo "$entry" | cut -d'/' -f1)"
-
-    if [[ "$entry" =~ \.tar\.gz$ ]] && [[ "$entry" == "$top" || "$entry" == "$top/" ]]; then
-      # This is a .tar.gz file at the top level
-      (( top_level_tarballs++ )) || true
-    fi
-  done < <(tar -tzf "$file" 2>/dev/null | head -100)
-
-  # Count distinct top-level entries
-  local distinct_top_levels="$(tar -tzf "$file" 2>/dev/null | cut -d'/' -f1 | sort -u | wc -l)"
-
-  # Heuristic: if the archive contains .tar.gz files at root level, it's a bundle.
-  # Also: if there are multiple distinct top-level directories, it's likely a bundle.
   local is_bundle=false
-  if (( top_level_tarballs >= 2 )); then
+  if is_archive_bundle "$file"; then
     is_bundle=true
-  elif (( distinct_top_levels > 1 )); then
-    # Check if those top-level entries are .tar.gz files
-    local tarball_count="$(tar -tzf "$file" 2>/dev/null | grep -cE '^[^/]+\.tar\.gz$' || echo 0)"
-    if (( tarball_count >= 2 )); then
-      is_bundle=true
-    fi
   fi
 
   # ── Case A: Archive-of-archives bundle ──────────────────────────────────────
