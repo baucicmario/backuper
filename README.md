@@ -47,7 +47,7 @@ cd backuper
 ./setup.sh
 
 # 3. Run backup
-./backup.sh
+sudo ./backup.sh
 
 # 4a. Restore a single service manually
 cd backups/split_stacks/players__jellyfin
