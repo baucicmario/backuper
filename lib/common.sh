@@ -286,3 +286,37 @@ is_archive_bundle() {
   fi
   return 1
 }
+
+# ── Animated disk usage calculation ──────────────────────────────────────────
+# Runs `du` with the provided arguments in the background while displaying
+# a spinning animation, so the user knows the script is not frozen.
+# Outputs the calculated size to stdout.
+# Usage: calc_size_with_spinner "Message..." -sb "/path/to/dir"
+calc_size_with_spinner() {
+  local msg="$1"
+  shift
+  
+  echo -ne "${BLUE}${msg}  ${RESET}" >&2
+  local temp_file
+  temp_file="$(mktemp)"
+  
+  { du "$@" 2>/dev/null | cut -f1 || echo "0"; } > "$temp_file" &
+  local du_pid=$!
+  
+  local sp="/-\|"
+  local sc=0
+  while kill -0 $du_pid 2>/dev/null; do
+    printf "\b${sp:sc++:1}" >&2
+    ((sc==${#sp})) && sc=0
+    sleep 0.1
+  done
+  printf "\b \n" >&2
+  wait $du_pid 2>/dev/null || true
+  
+  local size
+  size="$(cat "$temp_file" 2>/dev/null)"
+  [[ -z "$size" ]] && size=0
+  rm -f "$temp_file"
+  
+  echo "$size"
+}

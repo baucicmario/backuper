@@ -18,7 +18,7 @@ stderr_file="$(mktemp)"
 
 # Try tar|pv pipeline for precise progress tracking
 if command -v pv >/dev/null 2>&1; then
-  size_bytes=$(du -sb "$SRC" 2>/dev/null | cut -f1 || echo "0")
+  size_bytes="$(calc_size_with_spinner "  Calculating size of $SRC..." -sb "$SRC")"
   size_mb=$(( size_bytes / 1024 / 1024 ))
   echo "[job-sub_total: $size_mb]"
   

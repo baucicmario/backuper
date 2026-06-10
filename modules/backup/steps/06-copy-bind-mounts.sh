@@ -121,24 +121,7 @@ while IFS= read -r raw_volume; do
   fi
 
   # 4. Small mount — copy automatically
-  echo -ne "${BLUE}  Calculating size of $host_path...  ${RESET}" >&2
-  temp_file="$(mktemp)"
-  { du -sm "$host_path" 2>/dev/null | cut -f1 || echo 0; } > "$temp_file" &
-  du_pid=$!
-  
-  sp="/-\|"
-  sc=0
-  while kill -0 $du_pid 2>/dev/null; do
-    printf "\b${sp:sc++:1}" >&2
-    ((sc==${#sp})) && sc=0
-    sleep 0.1
-  done
-  printf "\b \n" >&2
-  wait $du_pid 2>/dev/null || true
-  
-  size_mb="$(cat "$temp_file" 2>/dev/null)"
-  [[ -z "$size_mb" ]] && size_mb=0
-  rm -f "$temp_file"
+  size_mb="$(calc_size_with_spinner "  Calculating size of $host_path..." -sm "$host_path")"
   if [[ "$size_mb" -le "$SIZE_THRESHOLD_MB" ]]; then
     info "Small mount (${size_mb}MB) — copying: $host_path"
     bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"

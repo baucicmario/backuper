@@ -57,10 +57,21 @@ fi
 # ── Archive ───────────────────────────────────────────────────────────────────
 info "  Archiving: $FOLDER_NAME → ${FOLDER_NAME}.tar.gz"
 
+  size_bytes="$(calc_size_with_spinner "  Calculating size of $SERVICE_DIR..." -sb "$SERVICE_DIR")"
+size_mb=$(( size_bytes / 1024 / 1024 ))
+
 # -C changes into the parent so the archive root is just the folder name,
 # not an absolute path. This makes extraction predictable anywhere.
-tar -czf "$ARCHIVE_PATH" -C "$PARENT_DIR" "$FOLDER_NAME" \
-  || die "tar failed for $SERVICE_DIR"
+if command -v pv >/dev/null 2>&1 && [[ "$size_mb" -gt 5 ]]; then
+  if [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
+    echo "[job-sub_total: 100]"
+    ( tar -cf - -C "$PARENT_DIR" "$FOLDER_NAME" 2>/dev/null | pv -n -f -s "$size_bytes" | gzip > "$ARCHIVE_PATH" ) 2>&1 | awk '{print "[pv: "$1"]"; fflush()}' || die "tar failed for $SERVICE_DIR"
+  else
+    tar -cf - -C "$PARENT_DIR" "$FOLDER_NAME" 2>/dev/null | pv -f -s "$size_bytes" | gzip > "$ARCHIVE_PATH" || die "tar failed for $SERVICE_DIR"
+  fi
+else
+  tar -czf "$ARCHIVE_PATH" -C "$PARENT_DIR" "$FOLDER_NAME" || die "tar failed for $SERVICE_DIR"
+fi
 
 ARCHIVE_SIZE="$(du -h "$ARCHIVE_PATH" | awk '{print $1}')"
 ok "  Archived:  $ARCHIVE_PATH  ($ARCHIVE_SIZE)"
