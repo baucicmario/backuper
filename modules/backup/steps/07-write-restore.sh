@@ -140,9 +140,19 @@ yq '.services.*.volumes[]' "\$SERVICE_COMPOSE" 2>/dev/null | while IFS= read -r 
 
   echo "  ✔ Restoring: \$local_dir → \$host_path"
   mkdir -p "\$host_path"
-  cp -rf "\$local_dir/." "\$host_path/" 2>/dev/null || \
-    sudo cp -rf "\$local_dir/." "\$host_path/" 2>/dev/null || \
-    echo "  ⚠️  Could not restore \$local_dir → \$host_path"
+  
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --info=progress2 "\$local_dir/" "\$host_path/" || echo "  ⚠️  Could not restore \$local_dir → \$host_path"
+  elif command -v pv >/dev/null 2>&1; then
+    size="\$(du -sb "\$local_dir" 2>/dev/null | cut -f1 || echo 0)"
+    if [[ "\$size" -gt 0 ]]; then
+      tar cf - -C "\$local_dir" . | pv -fs "\$size" | tar xf - -C "\$host_path" || echo "  ⚠️  Could not restore \$local_dir → \$host_path"
+    else
+      cp -a "\$local_dir/." "\$host_path/" || echo "  ⚠️  Could not restore \$local_dir → \$host_path"
+    fi
+  else
+    cp -a "\$local_dir/." "\$host_path/" || echo "  ⚠️  Could not restore \$local_dir → \$host_path"
+  fi
 
 done
 

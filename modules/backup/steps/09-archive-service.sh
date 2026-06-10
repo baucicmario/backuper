@@ -57,13 +57,57 @@ fi
 # ── Archive ───────────────────────────────────────────────────────────────────
 info "  Archiving: $FOLDER_NAME → ${FOLDER_NAME}.tar.gz"
 
-# -C changes into the parent so the archive root is just the folder name,
-# not an absolute path. This makes extraction predictable anywhere.
-tar -czf "$ARCHIVE_PATH" -C "$PARENT_DIR" "$FOLDER_NAME" \
-  || die "tar failed for $SERVICE_DIR"
+TAR_ARGS=("-C" "$PARENT_DIR" "$FOLDER_NAME")
+TOTAL_SIZE_BYTES=$(du -sb "$SERVICE_DIR" 2>/dev/null | cut -f1 || echo "0")
 
-ARCHIVE_SIZE="$(du -h "$ARCHIVE_PATH" | awk '{print $1}')"
-ok "  Archived:  $ARCHIVE_PATH  ($ARCHIVE_SIZE)"
+MOUNT_LIST="$SERVICE_DIR/.backup-mounts"
+if [[ -f "$MOUNT_LIST" ]]; then
+  while IFS='|' read -r host_path dest_name; do
+    [[ -z "$host_path" ]] && continue
+    if [[ -d "$host_path" || -f "$host_path" ]]; then
+      # Strip leading slash for GNU tar regex
+      sed_path="${host_path#/}"
+      # Use | as sed delimiter because paths contain /
+      TAR_ARGS+=( "--transform=s|^${sed_path}|${FOLDER_NAME}/${dest_name}|" "$host_path" )
+      
+      mount_size=$(du -sb "$host_path" 2>/dev/null | cut -f1 || echo "0")
+      TOTAL_SIZE_BYTES=$(( TOTAL_SIZE_BYTES + mount_size ))
+    fi
+  done < "$MOUNT_LIST"
+fi
+
+# Prevent .backup-mounts from being archived
+[[ -f "$MOUNT_LIST" ]] && rm -f "$MOUNT_LIST"
+
+stderr_file="$(mktemp)"
+
+if command -v pv >/dev/null 2>&1 && [[ "$TOTAL_SIZE_BYTES" -gt 0 ]]; then
+  total_size_mb=$(( TOTAL_SIZE_BYTES / 1024 / 1024 ))
+  echo "[job-sub_total: $total_size_mb]"
+  
+  if ( ( tar cf - "${TAR_ARGS[@]}" 2>"$stderr_file" || { res=$?; [[ $res -eq 1 ]] && exit 0 || exit $res; } ) | pv -n -f -s "$TOTAL_SIZE_BYTES" | gzip > "$ARCHIVE_PATH" ) 2>&1 | awk '{ if ($1 ~ /^[0-9]+$/) { print "[pv: "$1"]"; fflush() } else { print $0 > "/dev/stderr"; fflush() } }'; then
+    ARCHIVE_SIZE="$(du -h "$ARCHIVE_PATH" | awk '{print $1}')"
+    ok "  Archived:  $ARCHIVE_PATH  ($ARCHIVE_SIZE)"
+  else
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    die "tar failed for $SERVICE_DIR"
+  fi
+else
+  total_size_mb=$(( TOTAL_SIZE_BYTES / 1024 / 1024 ))
+  echo "[job-sub_total: $total_size_mb]"
+  
+  if ( tar -czf "$ARCHIVE_PATH" "${TAR_ARGS[@]}" 2>"$stderr_file" || { res=$?; [[ $res -eq 1 ]] && exit 0 || exit $res; } ); then
+    ARCHIVE_SIZE="$(du -h "$ARCHIVE_PATH" | awk '{print $1}')"
+    ok "  Archived:  $ARCHIVE_PATH  ($ARCHIVE_SIZE)"
+  else
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    die "tar failed for $SERVICE_DIR"
+  fi
+fi
+
+rm -f "$stderr_file"
 
 # ── Remove source if requested ────────────────────────────────────────────────
 if [[ "$ARCHIVE_MODE" == replace ]]; then

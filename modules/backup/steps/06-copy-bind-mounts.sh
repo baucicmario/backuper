@@ -53,6 +53,12 @@ is_known_config() {
   return 1
 }
 
+record_mount() {
+  local h="$1"
+  local d_name="$(basename "$2")"
+  echo "${h}|${d_name}" >> "$SERVICE_DIR/.backup-mounts"
+}
+
 # Duplicate original stdin (from python/user) to fd 3 so we can read from it inside the piped loop
 exec 3<&0
 
@@ -101,15 +107,15 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
 
   # 1. Known config mount — always copy
   if is_known_config "$mount_name"; then
-    info "Known config mount — copying: $host_path"
-    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
+    info "Known config mount — queuing for archive: $host_path"
+    record_mount "$host_path" "$dest_path"
     continue
   fi
 
   # 2. copy-all — copy everything
   if [[ "$MOUNT_MODE" == "copy-all" ]]; then
-    info "copy-all — copying: $host_path"
-    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
+    info "copy-all — queuing for archive: $host_path"
+    record_mount "$host_path" "$dest_path"
     continue
   fi
 
@@ -122,8 +128,8 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
   # 4. Small mount — copy automatically
   size_mb="$(du -sm "$host_path" 2>/dev/null | cut -f1)"
   if [[ "$size_mb" -le "$SIZE_THRESHOLD_MB" ]]; then
-    info "Small mount (${size_mb}MB) — copying: $host_path"
-    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
+    info "Small mount (${size_mb}MB) — queuing for archive: $host_path"
+    record_mount "$host_path" "$dest_path"
     continue
   fi
 
@@ -139,8 +145,8 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
     read -r answer </dev/tty 2>/dev/null || read -r answer <&3
   fi
   if [[ "${answer,,}" == "y" ]]; then
-    info "  Copying large mount (this may take a while)..."
-    bash "$SCRIPT_DIR/08-copy-dir.sh" "$host_path" "$dest_path"
+    info "  Queueing large mount for archive..."
+    record_mount "$host_path" "$dest_path"
   else
     warn "  Skipped: $host_path"
   fi
