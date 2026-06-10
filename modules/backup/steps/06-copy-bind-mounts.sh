@@ -56,7 +56,8 @@ is_known_config() {
 # Duplicate original stdin (from python/user) to fd 3 so we can read from it inside the piped loop
 exec 3<&0
 
-yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_volume; do
+SEEN_MOUNTS=()
+while IFS= read -r raw_volume; do
   [[ -z "$raw_volume" ]] && continue
 
   # Parse container path from raw string BEFORE any expansion — it never contains env vars
@@ -85,11 +86,11 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
 
   # Destination with collision guard
   dest_name="$mount_name"
-  dest_path="$SERVICE_DIR/$dest_name"
-  if [[ -d "$dest_path" || -e "$dest_path" ]] && [[ -n "$SERVICE_NAME" ]]; then
+  if [[ " ${SEEN_MOUNTS[*]:-} " =~ " $dest_name " ]] && [[ -n "$SERVICE_NAME" ]]; then
     dest_name="${SERVICE_NAME}__${dest_name}"
-    dest_path="$SERVICE_DIR/$dest_name"
   fi
+  SEEN_MOUNTS+=("$dest_name")
+  dest_path="$SERVICE_DIR/$dest_name"
 
   # Skip self-copy
   if [[ "$(realpath "$host_path")" == "$(realpath "$dest_path" 2>/dev/null || echo "")" ]]; then
@@ -162,7 +163,7 @@ yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null | while IFS= read -r raw_
     warn "  Skipped: $host_path"
   fi
 
-done
+done < <(yq '.services.*.volumes[]' "$COMPOSE_FILE" 2>/dev/null || true)
 
 exec 3<&-
 

@@ -22,7 +22,7 @@ if command -v pv >/dev/null 2>&1; then
   size_mb=$(( size_bytes / 1024 / 1024 ))
   echo "[job-sub_total: $size_mb]"
   
-  if [[ "$size_bytes" -gt 0 ]]; then
+  if [[ "$size_mb" -gt 5 ]]; then
     if [[ "${NONINTERACTIVE:-0}" == "1" ]]; then
       # We pipe stderr of tar to the temp file, and pv's stderr (which has the numbers) to awk for the Web UI
       if ( tar cf - -C "$SRC" . 2>"$stderr_file" | pv -n -f -s "$size_bytes" | tar xf - -C "$DST" 2>>"$stderr_file" ) 2>&1 | awk '{print "[pv: "$1"]"; fflush()}'; then
