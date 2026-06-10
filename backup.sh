@@ -9,4 +9,4 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
-exec "$SCRIPT_DIR/modules/backup/run.sh" "$@"
+exec bash "$SCRIPT_DIR/modules/backup/run.sh" "$@"
