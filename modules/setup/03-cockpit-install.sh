@@ -26,10 +26,61 @@ CODENAME="${VERSION_CODENAME:-}"
 info "Detected OS: ${YELLOW}${PRETTY_NAME}${RESET}"
 line
 
+# ── PackageKit / NetworkManager conflict fix ─────────────────
+# Cockpit uses PackageKit (packagekit.service) for software updates.
+# On systems where systemd-networkd manages networking (common on Ubuntu Server),
+# NetworkManager sees all interfaces as unmanaged and reports disconnected.
+# PackageKit queries NetworkManager by default, assumes the machine is offline,
+# and fails with: "Cannot refresh cache whilst offline".
+# Setting UseNetworkManager=false forces PackageKit to check network state independently.
+configure_packagekit_networkmanager() {
+  local config_file="/etc/PackageKit/PackageKit.conf"
+
+  info "Checking PackageKit configuration for NetworkManager conflict..."
+
+  # If neither config file nor PackageKit directory/binary exists, PackageKit isn't installed
+  if [ ! -f "$config_file" ] && [ ! -d "/etc/PackageKit" ] && ! command -v packagekitd >/dev/null 2>&1; then
+    info "PackageKit not detected on this system — skipping NetworkManager offline fix."
+    return 0
+  fi
+
+  info "Applying PackageKit NetworkManager fix (UseNetworkManager=false)..."
+
+  if [ ! -f "$config_file" ]; then
+    $SUDO mkdir -p "/etc/PackageKit"
+    printf "[Daemon]\nUseNetworkManager=false\n" | $SUDO tee "$config_file" >/dev/null
+  elif grep -Eq '^[[:space:]]*#?[[:space:]]*UseNetworkManager=' "$config_file"; then
+    $SUDO sed -i -E 's/^[[:space:]]*#?[[:space:]]*UseNetworkManager=.*/UseNetworkManager=false/' "$config_file"
+  elif grep -q '\[Daemon\]' "$config_file"; then
+    $SUDO sed -i '/\[Daemon\]/a UseNetworkManager=false' "$config_file"
+  else
+    printf "\n[Daemon]\nUseNetworkManager=false\n" | $SUDO tee -a "$config_file" >/dev/null
+  fi
+
+  ok "Configured $config_file (UseNetworkManager=false)."
+
+  # Restart packagekit service if systemd is available
+  if command -v systemctl >/dev/null 2>&1; then
+    info "Restarting packagekit service..."
+    $SUDO systemctl restart packagekit 2>/dev/null || warn "PackageKit service restart deferred (starts on demand via D-Bus)."
+    ok "PackageKit service refreshed."
+  fi
+}
+
 # ── Module selection ──────────────────────
 # If modules are passed as arguments, use them directly.
 # Otherwise show the whiptail TUI selector.
 if [ $# -gt 0 ]; then
+  case "${1:-}" in
+    --fix-packagekit|--fix-networkmanager|--fix-only)
+      configure_packagekit_networkmanager
+      exit 0
+      ;;
+    --help|-h)
+      echo "Usage: $0 [module1 module2 ...] [--fix-packagekit]"
+      exit 0
+      ;;
+  esac
   SELECTED=("$@")
   info "Modules provided via arguments: ${SELECTED[*]}"
 else
@@ -123,7 +174,7 @@ for pkg in "${SELECTED[@]}"; do
           echo -e "${BLUE}⬇️ Installing Cockpit Navigator (direct download)...${RESET}"
           NAV_URL="https://github.com/45Drives/cockpit-navigator/releases/download/v0.5.10/cockpit-navigator_0.5.10-1focal_all.deb"
           curl -L -o "${TMP_DIR}/cockpit-navigator.deb" "$NAV_URL"
-          sudo apt install -y "${TMP_DIR}/cockpit-navigator.deb" || sudo apt install -yf
+          $SUDO apt-get install -y "${TMP_DIR}/cockpit-navigator.deb" || $SUDO apt-get install -yf
           echo -e "${GREEN}✅ Cockpit Navigator installed.${RESET}"
           ;;
       cockpit-file-sharing)
@@ -140,7 +191,11 @@ for pkg in "${SELECTED[@]}"; do
 done
 line
 
-# ── Enable Cockpit ────────────────────────
+# ── Step 3: Configure PackageKit (Fix NetworkManager conflict) ─
+configure_packagekit_networkmanager
+line
+
+# ── Step 4: Enable Cockpit ────────────────
 info "Enabling Cockpit service..."
 $SUDO systemctl enable --now cockpit.socket
 
@@ -158,4 +213,7 @@ for pkg in "${SELECTED[@]}"; do
     && echo -e "   ${GREEN}✔ ${pkg}${RESET}" \
     || echo -e "   ${RED}✖ ${pkg}${RESET}"
 done
+if [ -f "/etc/PackageKit/PackageKit.conf" ] && grep -Eq '^[[:space:]]*UseNetworkManager=false' /etc/PackageKit/PackageKit.conf 2>/dev/null; then
+  echo -e "   ${GREEN}✔ PackageKit offline fix (UseNetworkManager=false)${RESET}"
+fi
 line
