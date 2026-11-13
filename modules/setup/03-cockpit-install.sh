@@ -32,38 +32,75 @@ line
 # NetworkManager sees all interfaces as unmanaged and reports disconnected.
 # PackageKit queries NetworkManager by default, assumes the machine is offline,
 # and fails with: "Cannot refresh cache whilst offline".
-# Setting UseNetworkManager=false forces PackageKit to check network state independently.
+# Complete resolution:
+# 1. Set UseNetworkManager=false in PackageKit.conf
+# 2. Set managed=true in NetworkManager.conf [ifupdown]
+# 3. Create a dummy network connection 'fake' with a gateway so NetworkManager detects an active route
+# 4. Bring up the dummy connection
+# 5. Cleanly restart NetworkManager and purge/restart packagekitd
 configure_packagekit_networkmanager() {
-  local config_file="/etc/PackageKit/PackageKit.conf"
+  local pk_config="/etc/PackageKit/PackageKit.conf"
+  local nm_config="/etc/NetworkManager/NetworkManager.conf"
 
-  info "Checking PackageKit configuration for NetworkManager conflict..."
+  info "Applying complete Cockpit connectivity & package update fix..."
 
-  # If neither config file nor PackageKit directory/binary exists, PackageKit isn't installed
-  if [ ! -f "$config_file" ] && [ ! -d "/etc/PackageKit" ] && ! command -v packagekitd >/dev/null 2>&1; then
-    info "PackageKit not detected on this system — skipping NetworkManager offline fix."
-    return 0
+  # 1. Update PackageKit configuration (UseNetworkManager=false)
+  if [ -f "$pk_config" ] || [ -d "/etc/PackageKit" ] || command -v packagekitd >/dev/null 2>&1; then
+    info "Configuring PackageKit (UseNetworkManager=false)..."
+    if [ ! -f "$pk_config" ]; then
+      $SUDO mkdir -p "/etc/PackageKit"
+      printf "[Daemon]\nUseNetworkManager=false\n" | $SUDO tee "$pk_config" >/dev/null
+    elif grep -Eq '^[[:space:]]*#?[[:space:]]*UseNetworkManager=' "$pk_config"; then
+      $SUDO sed -i -E 's/^[[:space:]]*#?[[:space:]]*UseNetworkManager=.*/UseNetworkManager=false/' "$pk_config"
+    elif grep -q '\[Daemon\]' "$pk_config"; then
+      $SUDO sed -i '/\[Daemon\]/a UseNetworkManager=false' "$pk_config"
+    else
+      printf "\n[Daemon]\nUseNetworkManager=false\n" | $SUDO tee -a "$pk_config" >/dev/null
+    fi
+    ok "Updated PackageKit configuration ($pk_config)."
   fi
 
-  info "Applying PackageKit NetworkManager fix (UseNetworkManager=false)..."
-
-  if [ ! -f "$config_file" ]; then
-    $SUDO mkdir -p "/etc/PackageKit"
-    printf "[Daemon]\nUseNetworkManager=false\n" | $SUDO tee "$config_file" >/dev/null
-  elif grep -Eq '^[[:space:]]*#?[[:space:]]*UseNetworkManager=' "$config_file"; then
-    $SUDO sed -i -E 's/^[[:space:]]*#?[[:space:]]*UseNetworkManager=.*/UseNetworkManager=false/' "$config_file"
-  elif grep -q '\[Daemon\]' "$config_file"; then
-    $SUDO sed -i '/\[Daemon\]/a UseNetworkManager=false' "$config_file"
-  else
-    printf "\n[Daemon]\nUseNetworkManager=false\n" | $SUDO tee -a "$config_file" >/dev/null
+  # 2. Update NetworkManager configuration (set managed=true for ifupdown)
+  if [ -f "$nm_config" ]; then
+    info "Configuring NetworkManager (managed=true)..."
+    if grep -q "managed=false" "$nm_config"; then
+      $SUDO sed -i 's/managed=false/managed=true/' "$nm_config"
+      ok "Updated NetworkManager config: managed=true."
+    elif ! grep -q "managed=true" "$nm_config"; then
+      if grep -q '\[ifupdown\]' "$nm_config"; then
+        $SUDO sed -i '/\[ifupdown\]/a managed=true' "$nm_config"
+      else
+        printf "\n[ifupdown]\nmanaged=true\n" | $SUDO tee -a "$nm_config" >/dev/null
+      fi
+      ok "Added managed=true to NetworkManager config."
+    fi
+  elif [ -d "/etc/NetworkManager" ]; then
+    printf "[main]\nplugins=ifupdown,keyfile\n\n[ifupdown]\nmanaged=true\n" | $SUDO tee "$nm_config" >/dev/null
+    ok "Created NetworkManager config with managed=true."
   fi
 
-  ok "Configured $config_file (UseNetworkManager=false)."
+  # 3. Create dummy network connection if it doesn't already exist
+  if command -v nmcli >/dev/null 2>&1; then
+    if ! nmcli con show 2>/dev/null | grep -q "fake"; then
+      info "Creating dummy network connection 'fake'..."
+      $SUDO nmcli con add type dummy con-name fake ifname fake0 ip4 1.2.3.4/24 gw4 1.2.3.1 2>/dev/null || warn "Could not add dummy connection 'fake'."
+    else
+      ok "Dummy network connection 'fake' already exists."
+    fi
 
-  # Restart packagekit service if systemd is available
+    # 4. Bring up the dummy connection
+    info "Bringing up dummy connection..."
+    $SUDO nmcli con up fake 2>/dev/null || true
+  fi
+
+  # 5. Restart NetworkManager and PackageKit cleanly
   if command -v systemctl >/dev/null 2>&1; then
-    info "Restarting packagekit service..."
-    $SUDO systemctl restart packagekit 2>/dev/null || warn "PackageKit service restart deferred (starts on demand via D-Bus)."
-    ok "PackageKit service refreshed."
+    info "Restarting NetworkManager and PackageKit services..."
+    $SUDO systemctl restart NetworkManager 2>/dev/null || true
+    $SUDO systemctl stop packagekit 2>/dev/null || true
+    $SUDO pkill -f packagekitd 2>/dev/null || true
+    $SUDO systemctl start packagekit 2>/dev/null || warn "PackageKit service start deferred (starts on demand via D-Bus)."
+    ok "NetworkManager and PackageKit services refreshed."
   fi
 }
 
@@ -72,7 +109,7 @@ configure_packagekit_networkmanager() {
 # Otherwise show the whiptail TUI selector.
 if [ $# -gt 0 ]; then
   case "${1:-}" in
-    --fix-packagekit|--fix-networkmanager|--fix-only)
+    --fix-packagekit|--fix-networkmanager|--fix-connectivity|--fix-only)
       configure_packagekit_networkmanager
       exit 0
       ;;
@@ -214,6 +251,6 @@ for pkg in "${SELECTED[@]}"; do
     || echo -e "   ${RED}✖ ${pkg}${RESET}"
 done
 if [ -f "/etc/PackageKit/PackageKit.conf" ] && grep -Eq '^[[:space:]]*UseNetworkManager=false' /etc/PackageKit/PackageKit.conf 2>/dev/null; then
-  echo -e "   ${GREEN}✔ PackageKit offline fix (UseNetworkManager=false)${RESET}"
+  echo -e "   ${GREEN}✔ PackageKit & NetworkManager connectivity fix applied${RESET}"
 fi
 line
